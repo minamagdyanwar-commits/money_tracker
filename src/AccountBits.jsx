@@ -1,5 +1,5 @@
 import { useApp } from './store.jsx';
-import { creditStatus, fmt, isoDate, nextInterest } from './logic.js';
+import { certSummary, creditStatus, fmt, isoDate } from './logic.js';
 
 export const ACCOUNT_TYPES = ['bank', 'cash', 'credit', 'savings', 'certificate'];
 // The first-run setup only asks for plain accounts; certificates are added later from Accounts.
@@ -31,25 +31,15 @@ export function CreditMeter({ acc, balance, cur }) {
   );
 }
 
-// Interest terms of a certificate and when the next payout is due.
-export function CertInfo({ acc, balance, cur }) {
-  const { t, dayLabel } = useApp();
-  const it = acc.interest;
-  if (acc.type !== 'certificate' || !it) return null;
-  const today = isoDate();
-  const next = nextInterest(acc, balance, today);
-  const matured = !it.closed && it.maturityDate && it.maturityDate <= today;
-  return (
-    <div className="credit">
-      <div className="small muted">{t('cert.rateLine', { rate: it.rate, every: t('cert.' + it.every) })}</div>
-      {it.closed ? (
-        <span className="tag plain" style={{ alignSelf: 'flex-start' }}>{t('cert.closed')}</span>
-      ) : (
-        <>
-          {next && <div className="small bold">{t('cert.next', { date: dayLabel(next.date), amt: fmt(next.amount) + ' ' + cur })}</div>}
-          {matured && <span className="tag mid" style={{ alignSelf: 'flex-start' }}>{t('cert.matured')}</span>}
-        </>
-      )}
-    </div>
-  );
+// One line under a certificate account in lists: how many certificates and the interest coming in 30 days.
+export function CertAccountInfo({ acc, cur }) {
+  const { t, state } = useApp();
+  if (acc.type !== 'certificate') return null;
+  const sum = certSummary(acc, state.transactions, state.transfers, isoDate());
+  const active = sum.rows.filter((r) => !r.cert.closed).length;
+  if (active === 0) return null;
+  return <div className="small muted" style={{ marginTop: 4 }}>{t('cert.accountLine', { n: active, amt: fmt(sum.next30) + ' ' + cur })}</div>;
 }
+
+// Rate and schedule of one certificate, e.g. "18% per year · every month".
+export const certRateLine = (t, cert) => t('cert.rateLine', { rate: cert.rate, every: t('cert.' + cert.every) });

@@ -1,6 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useReducer, useRef, useState } from 'react';
 import { loadState, requestPersistence, saveState } from './db.js';
-import { INTEREST_CATEGORY, accountInUse, accrueInterest, firstActiveAccount, isValidBackup, isoDate, monthOf, newId, payKey, redeemCertificate } from './logic.js';
+import { INTEREST_CATEGORY, accountInUse, accrueInterest, deleteCert, firstActiveAccount, isValidBackup, isoDate, migrateCertificates, monthOf, newId, payKey, redeemCertificate, saveCert } from './logic.js';
 import { DEFAULT_ACCOUNT_NAMES, DEFAULT_CATEGORY_NAMES, MONTHS, MONTHS_SHORT, detectLang, translate } from './i18n.js';
 
 export const DEFAULT_ACCOUNT_ID = 'acc-main';
@@ -123,6 +123,10 @@ export function reducer(state, action) {
     }
     case 'interest/accrue':
       return accrueInterest(state, action.today);
+    case 'cert/save':
+      return saveCert(state, action.accountId, action.cert);
+    case 'cert/delete':
+      return deleteCert(state, action.accountId, action.certId);
     case 'cert/redeem':
       return redeemCertificate(state, action.redeem);
     case 'settings':
@@ -150,7 +154,7 @@ export function mergeLoaded(saved) {
   if (merged.transactions.some((t) => !t.accountId)) {
     merged.transactions = merged.transactions.map((t) => (t.accountId ? t : { ...t, accountId: fallback }));
   }
-  return merged;
+  return migrateCertificates(merged);
 }
 
 const Ctx = createContext(null);

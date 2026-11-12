@@ -36,13 +36,20 @@ export const DEFAULT_ACCOUNT_NAMES = { 'acc-main': ['Main account', 'الحسا�
 
 const ar = {
   'nav.accounts': 'الحسابات',
-  'acc.type.certificate': 'شهادة / وديعة',
+  'acc.type.certificate': 'حساب شهادات',
   'acc.in': 'داخل', 'acc.out': 'خارج', 'acc.back': 'رجوع', 'acc.addEntry': '+ عملية', 'acc.period': 'الفترة',
   'acc.p.month': 'الشهر ده', 'acc.p.3m': '3 شهور', 'acc.p.6m': '6 شهور', 'acc.p.year': 'السنة دي', 'acc.p.all': 'الكل', 'acc.p.custom': 'مخصص',
   'acc.from': 'من', 'acc.to': 'إلى', 'acc.openBal': 'الرصيد في أول الفترة', 'acc.closeBal': 'الرصيد في آخر الفترة', 'acc.moneyIn': 'إجمالي الداخل', 'acc.moneyOut': 'إجمالي الخارج',
   'acc.balanceChart': 'تطور الرصيد', 'acc.flowChart': 'الداخل والخارج شهريًا', 'acc.history': 'سجل الحساب', 'acc.filterAll': 'الكل', 'acc.filterIn': 'داخل', 'acc.filterOut': 'خارج', 'acc.filterTransfers': 'تحويلات',
   'acc.search': 'بحث في السجل', 'acc.noRows': 'مفيش حركة في الفترة دي.', 'acc.balAfter': 'الرصيد بعدها {amt}', 'acc.more': 'عرض المزيد', 'acc.auto': 'فائدة تلقائية', 'acc.tapToEdit': 'اضغط على أي حركة لتعديلها أو حذفها.',
   'acc.savings': 'المدخرات والشهادات',
+
+  'cert.title': 'الشهادات', 'cert.add': '+ شهادة جديدة', 'cert.totalValue': 'إجمالي قيمة الشهادات', 'cert.earned': 'فوائد اتصرفت', 'cert.yearlyInterest': 'فايدة سنوية متوقعة', 'cert.next30': 'فوايد خلال 30 يوم',
+  'cert.count': '{n} شهادة', 'cert.value': 'القيمة', 'cert.name': 'اسم الشهادة', 'cert.namePh': 'مثال: شهادة 3 سنين 18%', 'cert.amount': 'قيمة الشهادة ({cur})', 'cert.openingValue': 'القيمة المبدئية ({cur})',
+  'cert.newTitle': 'شهادة جديدة', 'cert.editTitle': 'تعديل الشهادة', 'cert.upcoming': 'الفوائد الجاية', 'cert.payouts': 'الفوائد اللي اتصرفت', 'cert.noPayouts': 'لسه مفيش فوائد اتصرفت.',
+  'cert.deleteBtn': 'حذف الشهادة', 'cert.confirmDelete': 'حذف هذه الشهادة؟', 'cert.noCerts': 'ضيف شهادات الحساب ده، كل واحدة بقيمتها ونسبة فايدتها وموعدها.', 'cert.allCerts': 'كل الشهادات', 'cert.accountLine': '{n} شهادة · فوايد 30 يوم ≈ {amt}',
+  'cert.paidInto': 'اتصرفت في {name}', 'cert.valueHint': 'القيمة المبدئية بتتحسب منها الفايدة. لو سحبت من حساب تاني بتتسجّل كتحويل.', 'cert.hasEntries': 'الشهادة عليها حركات فمش هتتحذف، بس تقدر تفكها.',
+  'cert.fundHint': 'لو اخترت حساب، المبلغ بيتسحب منه النهارده وبيدخل الشهادة.',
   'cert.section': 'الفائدة', 'cert.rate': 'نسبة الفائدة السنوية (%)', 'cert.every': 'بتتصرف كل', 'cert.monthly': 'شهر', 'cert.quarterly': '3 شهور', 'cert.semiannual': '6 شهور', 'cert.yearly': 'سنة', 'cert.maturity': 'في آخر المدة',
   'cert.first': 'أول فائدة بتاريخ', 'cert.start': 'تاريخ بداية الشهادة', 'cert.maturityDate': 'تاريخ الاستحقاق', 'cert.maturityOpt': 'تاريخ الاستحقاق (اختياري)',
   'cert.payTo': 'الفائدة بتتحط في', 'cert.reinvest': 'نفس الشهادة (تتراكم)', 'cert.fundFrom': 'اسحب المبلغ من حساب (اختياري، لشهادة جديدة)', 'cert.fundNone': 'لا',
@@ -152,13 +159,20 @@ const ar = {
 
 const en = {
   'nav.accounts': 'Accounts',
-  'acc.type.certificate': 'Certificate / deposit',
+  'acc.type.certificate': 'Certificates account',
   'acc.in': 'In', 'acc.out': 'Out', 'acc.back': 'Back', 'acc.addEntry': '+ Entry', 'acc.period': 'Period',
   'acc.p.month': 'This month', 'acc.p.3m': '3 months', 'acc.p.6m': '6 months', 'acc.p.year': 'This year', 'acc.p.all': 'All', 'acc.p.custom': 'Custom',
   'acc.from': 'From', 'acc.to': 'To', 'acc.openBal': 'Balance at start', 'acc.closeBal': 'Balance at end', 'acc.moneyIn': 'Total in', 'acc.moneyOut': 'Total out',
   'acc.balanceChart': 'Balance over time', 'acc.flowChart': 'In and out per month', 'acc.history': 'Account history', 'acc.filterAll': 'All', 'acc.filterIn': 'In', 'acc.filterOut': 'Out', 'acc.filterTransfers': 'Transfers',
   'acc.search': 'Search history', 'acc.noRows': 'No activity in this period.', 'acc.balAfter': 'Balance after {amt}', 'acc.more': 'Show more', 'acc.auto': 'Auto interest', 'acc.tapToEdit': 'Tap any entry to edit or delete it.',
   'acc.savings': 'Savings & certificates',
+
+  'cert.title': 'Certificates', 'cert.add': '+ New certificate', 'cert.totalValue': 'Total value of certificates', 'cert.earned': 'Interest paid', 'cert.yearlyInterest': 'Expected yearly interest', 'cert.next30': 'Interest in 30 days',
+  'cert.count': '{n} certificates', 'cert.value': 'Value', 'cert.name': 'Certificate name', 'cert.namePh': 'e.g. 3-year certificate 18%', 'cert.amount': 'Certificate value ({cur})', 'cert.openingValue': 'Starting value ({cur})',
+  'cert.newTitle': 'New certificate', 'cert.editTitle': 'Edit certificate', 'cert.upcoming': 'Upcoming interest', 'cert.payouts': 'Interest paid so far', 'cert.noPayouts': 'No interest paid yet.',
+  'cert.deleteBtn': 'Delete certificate', 'cert.confirmDelete': 'Delete this certificate?', 'cert.noCerts': 'Add this account\'s certificates, each with its own value, interest rate and schedule.', 'cert.allCerts': 'All certificates', 'cert.accountLine': '{n} certificate(s) · interest in 30 days ≈ {amt}',
+  'cert.paidInto': 'Paid into {name}', 'cert.valueHint': 'Interest is calculated on this value. If you take it from another account it is recorded as a transfer.', 'cert.hasEntries': 'This certificate has entries so it cannot be deleted, but you can redeem it.',
+  'cert.fundHint': 'If you pick an account, the amount is taken from it today and goes into the certificate.',
   'cert.section': 'Interest', 'cert.rate': 'Annual interest rate (%)', 'cert.every': 'Paid every', 'cert.monthly': 'month', 'cert.quarterly': '3 months', 'cert.semiannual': '6 months', 'cert.yearly': 'year', 'cert.maturity': 'At maturity',
   'cert.first': 'First interest on', 'cert.start': 'Certificate start date', 'cert.maturityDate': 'Maturity date', 'cert.maturityOpt': 'Maturity date (optional)',
   'cert.payTo': 'Interest goes into', 'cert.reinvest': 'The certificate itself (compounds)', 'cert.fundFrom': 'Take the amount from an account (optional)', 'cert.fundNone': 'No',

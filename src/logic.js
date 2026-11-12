@@ -385,9 +385,13 @@ export function periodRange(preset, today) {
 }
 
 // ---- certificates and scheduled interest -----------------------------------
-// A certificate is an account (type 'certificate') with `interest`:
-//   { rate (% per year), every: 'monthly'|'quarterly'|'semiannual'|'yearly'|'maturity',
-//     firstDate (first payout), startDate (for 'maturity'), maturityDate?, payoutAccountId, paid: [dates], closed? }
+// A deposit account (type 'certificate') holds any number of certificates in `acc.certs`:
+//   { id, name, openingAmount, rate (% per year), every: 'monthly'|'quarterly'|'semiannual'|'yearly'|'maturity',
+//     firstDate (first payout), startDate (for 'maturity'), maturityDate?, payoutAccountId ('' = reinvest into the
+//     certificate), paid: [dates], closed? }
+// Each certificate is valued on its own: openingAmount plus the entries and transfers tagged with its `certId`
+// (purchase, reinvested interest, redemption), so interest is calculated per certificate. The account balance
+// is the ledger balance as usual (its opening balance is the sum of the certificates' opening amounts).
 // Interest is credited as income entries, so it shows up in history, charts and analytics.
 
 export const INTEREST_CATEGORY = 'i-interest';
@@ -408,90 +412,173 @@ export function monthsBetween(a, b) {
 
 export const round2 = (n) => Math.round(n * 100) / 100;
 
+// Value of one certificate up to and including `asOf`.
+export function certBalance(acc, cert, txs, transfers, asOf) {
+  let balance = cert.openingAmount || 0;
+  for (const t of txs) {
+    if (t.certId !== cert.id || t.accountId !== acc.id || t.date > asOf) continue;
+    balance += t.type === 'income' ? t.amount : -t.amount;
+  }
+  for (const tr of transfers) {
+    if (tr.certId !== cert.id || tr.date > asOf) continue;
+    if (tr.toId === acc.id) balance += tr.amount;
+    if (tr.fromId === acc.id) balance -= tr.amount;
+  }
+  return balance;
+}
+
 // Payout dates that are due (<= today) and not paid yet, oldest first.
-export function dueInterestDates(it, today) {
-  if (!it || it.closed || !(it.rate > 0)) return [];
-  const paid = new Set(it.paid || []);
+export function dueInterestDates(cert, today) {
+  if (!cert || cert.closed || !(cert.rate > 0)) return [];
+  const paid = new Set(cert.paid || []);
   const out = [];
-  if (it.every === 'maturity') {
-    if (it.maturityDate && it.maturityDate <= today && !paid.has(it.maturityDate)) out.push(it.maturityDate);
+  if (cert.every === 'maturity') {
+    if (cert.maturityDate && cert.maturityDate <= today && !paid.has(cert.maturityDate)) out.push(cert.maturityDate);
     return out;
   }
-  const step = EVERY_MONTHS[it.every];
-  if (!step || !it.firstDate) return [];
+  const step = EVERY_MONTHS[cert.every];
+  if (!step || !cert.firstDate) return [];
   for (let k = 0; k < 240; k++) {
-    const d = addMonthsToDate(it.firstDate, k * step);
-    if (d > today || (it.maturityDate && d > it.maturityDate)) break;
+    const d = addMonthsToDate(cert.firstDate, k * step);
+    if (d > today || (cert.maturityDate && d > cert.maturityDate)) break;
     if (!paid.has(d)) out.push(d);
   }
   return out;
 }
 
-export function interestFor(it, balance, date) {
-  const months = it.every === 'maturity' ? monthsBetween(it.startDate || date, date) : EVERY_MONTHS[it.every];
-  return round2((Math.max(balance, 0) * it.rate * months) / 1200);
+export function interestFor(cert, balance, date) {
+  const months = cert.every === 'maturity' ? monthsBetween(cert.startDate || date, date) : EVERY_MONTHS[cert.every];
+  return round2((Math.max(balance, 0) * cert.rate * months) / 1200);
 }
 
-// Next payout after `today` with an estimate based on today's balance (null if none is left).
-export function nextInterest(acc, balance, today) {
-  const it = acc.interest;
-  if (!it || it.closed || !(it.rate > 0)) return null;
-  let date = null;
-  if (it.every === 'maturity') {
-    if (it.maturityDate && it.maturityDate > today) date = it.maturityDate;
-  } else if (it.firstDate && EVERY_MONTHS[it.every]) {
-    const step = EVERY_MONTHS[it.every];
-    for (let k = 0; k < 240; k++) {
-      const d = addMonthsToDate(it.firstDate, k * step);
-      if (it.maturityDate && d > it.maturityDate) break;
-      if (d > today) {
-        date = d;
-        break;
-      }
-    }
+// The next `n` payouts after `today`, estimated on `balance` (no compounding).
+export function upcomingInterest(cert, balance, today, n = 6) {
+  if (!cert || cert.closed || !(cert.rate > 0)) return [];
+  const out = [];
+  if (cert.every === 'maturity') {
+    if (cert.maturityDate && cert.maturityDate > today) out.push({ date: cert.maturityDate, amount: interestFor(cert, balance, cert.maturityDate) });
+    return out;
   }
-  return date ? { date, amount: interestFor(it, balance, date) } : null;
+  const step = EVERY_MONTHS[cert.every];
+  if (!step || !cert.firstDate) return [];
+  for (let k = 0; k < 480 && out.length < n; k++) {
+    const d = addMonthsToDate(cert.firstDate, k * step);
+    if (cert.maturityDate && d > cert.maturityDate) break;
+    if (d > today) out.push({ date: d, amount: interestFor(cert, balance, d) });
+  }
+  return out;
 }
 
-// Credits all interest that has come due. Returns the same object when nothing was due,
-// so callers can skip saving. Paying into the certificate itself compounds it.
+export const nextInterest = (cert, balance, today) => upcomingInterest(cert, balance, today, 1)[0] || null;
+
+// Every certificate of a deposit account valued on its own, plus the totals across all of them.
+export function certSummary(acc, txs, transfers, today) {
+  const horizon = addDays(today, 30);
+  const rows = (acc.certs || []).map((cert) => {
+    const balance = certBalance(acc, cert, txs, transfers, today);
+    let earned = 0;
+    for (const t of txs) if (t.certId === cert.id && t.autoInterest && t.date <= today) earned += t.amount;
+    const upcoming = cert.closed ? [] : upcomingInterest(cert, balance, today, 6);
+    return { cert, balance, earned, upcoming, next: upcoming[0] || null, yearly: cert.closed ? 0 : (balance * (cert.rate || 0)) / 100 };
+  });
+  const active = rows.filter((r) => !r.cert.closed);
+  return {
+    rows,
+    value: active.reduce((a, r) => a + r.balance, 0),
+    earned: rows.reduce((a, r) => a + r.earned, 0),
+    yearly: active.reduce((a, r) => a + r.yearly, 0),
+    next30: active.reduce((a, r) => a + r.upcoming.filter((u) => u.date <= horizon).reduce((x, u) => x + u.amount, 0), 0),
+  };
+}
+
+// Credits all interest that has come due, certificate by certificate. Returns the same object when nothing
+// was due, so callers can skip saving. Interest paid into the certificate itself compounds it.
 export function accrueInterest(data, today) {
   let txs = data.transactions;
   let changed = false;
   const accounts = data.accounts.map((acc) => {
-    const it = acc.interest;
-    if (acc.type !== 'certificate' || !it) return acc;
-    const dates = dueInterestDates(it, today);
-    if (!dates.length) return acc;
-    const paid = [...(it.paid || [])];
-    for (const d of dates) {
-      const amount = interestFor(it, accountBalance(acc, txs, data.transfers, d), d);
-      if (amount > 0) {
-        txs = [...txs, { id: newId(), type: 'income', amount, categoryId: INTEREST_CATEGORY, date: d, note: acc.name, accountId: it.payoutAccountId || acc.id, autoInterest: true, sourceId: acc.id }];
+    if (acc.type !== 'certificate' || !acc.certs?.length) return acc;
+    const certs = acc.certs.map((cert) => {
+      const dates = dueInterestDates(cert, today);
+      if (!dates.length) return cert;
+      const paid = [...(cert.paid || [])];
+      for (const d of dates) {
+        const amount = interestFor(cert, certBalance(acc, cert, txs, data.transfers, d), d);
+        if (amount > 0) {
+          txs = [...txs, { id: newId(), type: 'income', amount, categoryId: INTEREST_CATEGORY, date: d, note: cert.name, accountId: cert.payoutAccountId || acc.id, certId: cert.id, sourceId: acc.id, autoInterest: true }];
+        }
+        paid.push(d);
       }
-      paid.push(d);
-    }
-    changed = true;
-    return { ...acc, interest: { ...it, paid } };
+      changed = true;
+      return { ...cert, paid };
+    });
+    return { ...acc, certs };
   });
   return changed ? { ...data, accounts, transactions: txs } : data;
 }
 
-// Redeeming (fully or partly): `principal` leaves the certificate, `received` lands in `toId`.
+// Adds or updates a certificate; the account's opening balance follows the certificates' opening amounts.
+export function saveCert(data, accountId, cert) {
+  const accounts = data.accounts.map((acc) => {
+    if (acc.id !== accountId) return acc;
+    const list = acc.certs || [];
+    const certs = list.some((c) => c.id === cert.id) ? list.map((c) => (c.id === cert.id ? cert : c)) : [...list, cert];
+    return { ...acc, certs, openingBalance: certs.reduce((a, c) => a + (c.openingAmount || 0), 0) };
+  });
+  return { ...data, accounts };
+}
+
+export function deleteCert(data, accountId, certId) {
+  const used = data.transactions.some((t) => t.certId === certId) || data.transfers.some((t) => t.certId === certId);
+  if (used) return data;
+  const accounts = data.accounts.map((acc) => {
+    if (acc.id !== accountId) return acc;
+    const certs = (acc.certs || []).filter((c) => c.id !== certId);
+    return { ...acc, certs, openingBalance: certs.reduce((a, c) => a + (c.openingAmount || 0), 0) };
+  });
+  return { ...data, accounts };
+}
+
+// Redeeming one certificate (fully or partly): `principal` leaves it, `received` lands in `toId`.
 // More received than released is extra interest (income); less is a penalty (expense on the certificate).
-export function redeemCertificate(data, { accountId, principal, received, toId, date, note }) {
+export function redeemCertificate(data, { accountId, certId, principal, received, toId, date, note }) {
   const acc = data.accounts.find((a) => a.id === accountId);
-  if (!acc || !(principal > 0) || !(received >= 0)) return data;
-  const balance = accountBalance(acc, data.transactions, data.transfers, date);
+  const cert = acc?.certs?.find((c) => c.id === certId);
+  if (!cert || !(principal > 0) || !(received >= 0)) return data;
+  const balance = certBalance(acc, cert, data.transactions, data.transfers, date);
   const released = Math.min(principal, Math.max(balance, 0));
   const closing = released >= balance - 0.005;
   const transfers = [...data.transfers];
-  let txs = [...data.transactions];
-  const sameAccount = toId === accountId;
+  const txs = [...data.transactions];
   const moved = Math.min(received, released);
-  if (!sameAccount && moved > 0) transfers.push({ id: newId(), date, fromId: accountId, toId, amount: moved, note: note || 'Redemption' });
-  if (received > released) txs.push({ id: newId(), type: 'income', amount: round2(received - released), categoryId: INTEREST_CATEGORY, date, note: note || acc.name, accountId: toId });
-  if (received < released) txs.push({ id: newId(), type: 'expense', amount: round2(released - received), categoryId: 'c-other', date, note: note || acc.name, accountId: accountId });
-  const accounts = data.accounts.map((a) => (a.id === accountId ? { ...a, archived: closing ? true : a.archived, interest: a.interest ? { ...a.interest, closed: closing || a.interest.closed } : a.interest } : a));
+  if (toId !== accountId && moved > 0) transfers.push({ id: newId(), date, fromId: accountId, toId, amount: moved, certId, note: note || cert.name });
+  if (received > released) txs.push({ id: newId(), type: 'income', amount: round2(received - released), categoryId: INTEREST_CATEGORY, date, note: note || cert.name, accountId: toId });
+  if (received < released) txs.push({ id: newId(), type: 'expense', amount: round2(released - received), categoryId: 'c-other', date, note: note || cert.name, accountId, certId });
+  const accounts = data.accounts.map((a) => (a.id === accountId ? { ...a, certs: a.certs.map((c) => (c.id === certId && closing ? { ...c, closed: true } : c)) } : a));
   return { ...data, accounts, transfers, transactions: txs };
+}
+
+// Older data kept a single certificate's terms on the account (`acc.interest`). Turn that into one
+// certificate inside the account and tag the account's entries with it. Safe to run repeatedly.
+export function migrateCertificates(data) {
+  let changed = false;
+  let txs = data.transactions;
+  let transfers = data.transfers || [];
+  const accounts = data.accounts.map((acc) => {
+    if (acc.type !== 'certificate' || acc.certs) return acc;
+    changed = true;
+    const it = acc.interest;
+    const { interest, ...rest } = acc;
+    if (!it) return { ...rest, certs: [] };
+    const certId = `${acc.id}-c1`;
+    const cert = {
+      id: certId, name: acc.name, openingAmount: acc.openingBalance || 0, rate: it.rate, every: it.every, firstDate: it.firstDate,
+      startDate: it.startDate, maturityDate: it.maturityDate, payoutAccountId: !it.payoutAccountId || it.payoutAccountId === acc.id ? '' : it.payoutAccountId,
+      paid: it.paid || [], closed: !!it.closed,
+    };
+    txs = txs.map((t) => (t.accountId === acc.id || t.sourceId === acc.id ? { ...t, certId } : t));
+    transfers = transfers.map((t) => (t.fromId === acc.id || t.toId === acc.id ? { ...t, certId } : t));
+    return { ...rest, certs: [cert] };
+  });
+  return changed ? { ...data, accounts, transactions: txs, transfers } : data;
 }

@@ -1,62 +1,41 @@
 import { useState } from 'react';
 import { PALETTE, useApp } from './store.jsx';
-import { accountBalance, accountInUse, accountSummary, addMonthsToDate, firstActiveAccount, fmt, isoDate, newId } from './logic.js';
+import { accountInUse, accountSummary, firstActiveAccount, fmt, isoDate } from './logic.js';
 import AddSheet from './AddSheet.jsx';
 import AccountPage from './AccountPage.jsx';
-import { ACCOUNT_TYPES, BalanceText, CertInfo, CreditMeter } from './AccountBits.jsx';
+import { ACCOUNT_TYPES, BalanceText, CertAccountInfo, CreditMeter } from './AccountBits.jsx';
+import { CertDetail, CertForm, RedeemSheet } from './CertSheets.jsx';
 import { Field, Icon, Sheet, numericOnly, parseAmount } from './ui.jsx';
 
-const EVERY = ['monthly', 'quarterly', 'semiannual', 'yearly', 'maturity'];
-
 function AccountForm({ acc, onClose }) {
-  const { state, dispatch, t, toast, accName } = useApp();
+  const { state, dispatch, t, toast } = useApp();
   const editing = !!acc;
-  const today = isoDate();
-  const it = acc?.interest;
   const [name, setName] = useState(acc?.name ?? '');
   const [type, setType] = useState(acc?.type ?? 'bank');
   const [color, setColor] = useState(acc?.color ?? PALETTE[state.accounts.length % PALETTE.length]);
   const initial = acc ? (acc.type === 'credit' ? Math.max(-(acc.openingBalance || 0), 0) : acc.openingBalance || 0) : 0;
   const [opening, setOpening] = useState(initial ? String(initial) : '');
   const [limit, setLimit] = useState(acc?.creditLimit ? String(acc.creditLimit) : '');
-  const [rate, setRate] = useState(it?.rate ? String(it.rate) : '');
-  const [every, setEvery] = useState(it?.every ?? 'monthly');
-  const [firstDate, setFirstDate] = useState(it?.firstDate ?? addMonthsToDate(today, 1));
-  const [startDate, setStartDate] = useState(it?.startDate ?? today);
-  const [maturityDate, setMaturityDate] = useState(it?.maturityDate ?? '');
-  const [payTo, setPayTo] = useState(it?.payoutAccountId ?? '');
-  const [fundFrom, setFundFrom] = useState('');
   const credit = type === 'credit';
   const cert = type === 'certificate';
   const used = editing && accountInUse(acc.id, state.transactions, state.transfers, state.recurring);
   const cur = state.settings.currency;
-  const others = state.accounts.filter((a) => !a.archived && a.id !== acc?.id && a.type !== 'certificate');
-  const rateValue = parseAmount(rate);
-  const certValid = !cert || (rateValue > 0 && (every === 'maturity' ? startDate && maturityDate && maturityDate > startDate : firstDate));
-  const valid = name.trim() && certValid;
 
   const save = () => {
     const amount = parseAmount(opening) || 0;
-    const id = acc?.id ?? newId();
-    const funded = !editing && cert && fundFrom && amount > 0;
-    const next = { ...(acc || { archived: false }), id, name: name.trim(), type, color, openingBalance: funded ? 0 : credit ? -amount : amount };
+    const next = { ...(acc || { archived: false }), name: name.trim(), type, color, openingBalance: credit ? -amount : amount };
     const cardLimit = parseAmount(limit);
     if (credit && cardLimit > 0) next.creditLimit = cardLimit;
     else delete next.creditLimit;
     if (cert) {
-      next.interest = {
-        ...(it || {}),
-        rate: rateValue,
-        every,
-        firstDate: every === 'maturity' ? undefined : firstDate,
-        startDate: every === 'maturity' ? startDate : undefined,
-        maturityDate: maturityDate || undefined,
-        payoutAccountId: payTo === '' || payTo === 'self' ? id : payTo,
-        paid: it?.paid ?? [],
-      };
-    } else delete next.interest;
+      // a certificates account is valued by its certificates: their opening amounts make up its opening balance
+      next.certs = acc?.certs ?? [];
+      next.openingBalance = next.certs.length ? acc.openingBalance : amount;
+    } else {
+      delete next.certs;
+    }
+    delete next.interest;
     dispatch({ type: 'acc/save', acc: next });
-    if (funded) dispatch({ type: 'transfer/save', transfer: { fromId: fundFrom, toId: id, amount, date: today, note: next.name } });
     toast(t('acc.saved'));
     onClose();
   };
@@ -73,10 +52,14 @@ function AccountForm({ acc, onClose }) {
       <div className="chips">
         {ACCOUNT_TYPES.map((k) => <button key={k} className={'chip' + (type === k ? ' on' : '')} onClick={() => setType(k)}>{t('acc.type.' + k)}</button>)}
       </div>
-      <Field label={t(credit ? 'acc.openingOwed' : editing ? 'acc.openingEdit' : 'acc.opening', { cur })}>
-        <input inputMode="decimal" placeholder="0" value={opening} onChange={(e) => setOpening(numericOnly(e.target.value))} />
-      </Field>
-      <div className="muted small">{t(credit ? 'acc.openingHintCredit' : 'acc.openingHint')}</div>
+      {!(cert && acc?.certs?.length) && (
+        <>
+          <Field label={t(credit ? 'acc.openingOwed' : editing ? 'acc.openingEdit' : 'acc.opening', { cur })}>
+            <input inputMode="decimal" placeholder="0" value={opening} onChange={(e) => setOpening(numericOnly(e.target.value))} />
+          </Field>
+          <div className="muted small">{t(credit ? 'acc.openingHintCredit' : 'acc.openingHint')}</div>
+        </>
+      )}
       {credit && (
         <>
           <Field label={t('acc.limit', { cur })}>
@@ -85,52 +68,13 @@ function AccountForm({ acc, onClose }) {
           <div className="muted small">{t('acc.limitHint')}</div>
         </>
       )}
-      {cert && (
-        <>
-          {!editing && others.length > 0 && (
-            <Field label={t('cert.fundFrom')}>
-              <select value={fundFrom} onChange={(e) => setFundFrom(e.target.value)}>
-                <option value="">{t('cert.fundNone')}</option>
-                {others.map((a) => <option key={a.id} value={a.id}>{accName(a.id)}</option>)}
-              </select>
-            </Field>
-          )}
-          <div className="muted small bold">{t('cert.section')}</div>
-          <Field label={t('cert.rate')}>
-            <input inputMode="decimal" placeholder="0" value={rate} onChange={(e) => setRate(numericOnly(e.target.value))} />
-          </Field>
-          <div className="muted small">{t('cert.every')}</div>
-          <div className="chips">
-            {EVERY.map((k) => <button key={k} className={'chip' + (every === k ? ' on' : '')} onClick={() => setEvery(k)}>{t('cert.' + k)}</button>)}
-          </div>
-          {every === 'maturity' ? (
-            <>
-              <Field label={t('cert.start')}><input type="date" value={startDate} onChange={(e) => setStartDate(e.target.value)} /></Field>
-              <Field label={t('cert.maturityDate')}><input type="date" value={maturityDate} onChange={(e) => setMaturityDate(e.target.value)} /></Field>
-            </>
-          ) : (
-            <>
-              <Field label={t('cert.first')}><input type="date" value={firstDate} onChange={(e) => setFirstDate(e.target.value)} /></Field>
-              <Field label={t('cert.maturityOpt')}><input type="date" value={maturityDate} onChange={(e) => setMaturityDate(e.target.value)} /></Field>
-            </>
-          )}
-          <Field label={t('cert.payTo')}>
-            <select value={payTo === '' ? 'self' : payTo} onChange={(e) => setPayTo(e.target.value)}>
-              <option value="self">{t('cert.reinvest')}</option>
-              {others.map((a) => <option key={a.id} value={a.id}>{accName(a.id)}</option>)}
-            </select>
-          </Field>
-          <div className="muted small">{t('cert.pastHint')}</div>
-          <div className="muted small">{t('cert.autoHint')}</div>
-        </>
-      )}
       <div className="muted small bold">{t('cat.colour')}</div>
       <div className="chips">
         {PALETTE.map((c) => (
           <button key={c} aria-label={`${t('cat.colour')} ${c}`} aria-pressed={color === c} onClick={() => setColor(c)} style={{ width: 44, height: 44, borderRadius: 12, background: c, border: color === c ? '3px solid var(--ink)' : '3px solid transparent' }} />
         ))}
       </div>
-      <button className="btn block" disabled={!valid} onClick={save}>{t('common.save')}</button>
+      <button className="btn block" disabled={!name.trim()} onClick={save}>{t('common.save')}</button>
       {editing && (
         <button className="btn secondary" onClick={() => { dispatch({ type: 'acc/archive', id: acc.id, archived: !acc.archived }); onClose(); }}>
           {acc.archived ? t('acc.restore') : t('acc.archive')}
@@ -188,50 +132,6 @@ export function TransferSheet({ transfer, fromId, toId, onClose }) {
   );
 }
 
-// Breaking a certificate: how much leaves it, how much actually arrived and where.
-function RedeemSheet({ acc, onClose }) {
-  const { state, dispatch, t, toast, accName } = useApp();
-  const cur = state.settings.currency;
-  const today = isoDate();
-  const balance = accountBalance(acc, state.transactions, state.transfers, today);
-  const targets = state.accounts.filter((a) => !a.archived && a.id !== acc.id && a.type !== 'certificate');
-  const preferred = targets.find((a) => a.id === acc.interest?.payoutAccountId) || targets[0];
-  const [principal, setPrincipal] = useState(String(Math.max(Math.round(balance * 100) / 100, 0)));
-  const [received, setReceived] = useState(String(Math.max(Math.round(balance * 100) / 100, 0)));
-  const [touched, setTouched] = useState(false);
-  const [toId, setToId] = useState(preferred?.id ?? '');
-  const [date, setDate] = useState(today);
-  const [note, setNote] = useState('');
-  const p = parseAmount(principal);
-  const r = parseAmount(received);
-  const valid = p > 0 && r >= 0 && toId && date;
-
-  const save = () => {
-    dispatch({ type: 'cert/redeem', redeem: { accountId: acc.id, principal: p, received: r, toId, date, note: note.trim() } });
-    toast(t('cert.redeemDone', { amt: fmt(r), cur }));
-    onClose();
-  };
-
-  return (
-    <Sheet title={t('cert.redeemTitle', { name: accName(acc.id) })} onClose={onClose}>
-      <div className="muted">{t('cert.balanceNow', { amt: fmt(balance), cur })}</div>
-      <Field label={t('cert.principalOut', { cur })}>
-        <input inputMode="decimal" value={principal} onChange={(e) => { setPrincipal(numericOnly(e.target.value)); if (!touched) setReceived(numericOnly(e.target.value)); }} />
-      </Field>
-      <Field label={t('cert.received', { cur })}>
-        <input inputMode="decimal" value={received} onChange={(e) => { setReceived(numericOnly(e.target.value)); setTouched(true); }} />
-      </Field>
-      <Field label={t('cert.receiveIn')}>
-        <select value={toId} onChange={(e) => setToId(e.target.value)}>{targets.map((a) => <option key={a.id} value={a.id}>{accName(a.id)}</option>)}</select>
-      </Field>
-      <Field label={t('add.date')}><input type="date" value={date} onChange={(e) => setDate(e.target.value)} /></Field>
-      <Field label={t('add.note')}><input type="text" placeholder={t('add.optional')} value={note} onChange={(e) => setNote(e.target.value)} /></Field>
-      <div className="muted small">{t('cert.redeemHint')}</div>
-      <button className="btn block" disabled={!valid} onClick={save}>{t('cert.redeem')}</button>
-    </Sheet>
-  );
-}
-
 export default function Accounts() {
   const { state, t, accName } = useApp();
   const [asOf, setAsOf] = useState(isoDate());
@@ -240,7 +140,9 @@ export default function Accounts() {
   const [transfer, setTransfer] = useState(undefined); // undefined closed, {} new, {transfer} edit, {fromId,toId}
   const [editTx, setEditTx] = useState(null);
   const [addFor, setAddFor] = useState(null); // account id for a new entry
-  const [redeem, setRedeem] = useState(null);
+  const [certForm, setCertForm] = useState(null); // { accId, cert|null }
+  const [certView, setCertView] = useState(null); // { accId, certId }
+  const [redeem, setRedeem] = useState(null); // { accId, cert }
   const cur = state.settings.currency;
   const summary = accountSummary(state.accounts, state.transactions, state.transfers, asOf);
   const active = summary.rows.filter((r) => !r.acc.archived);
@@ -257,7 +159,7 @@ export default function Accounts() {
         <div className="bold">{accName(r.acc.id)} {r.acc.archived && <span className="muted small">{t('acc.archivedTag')}</span>}</div>
         <div className="muted small">{t('acc.type.' + r.acc.type)}</div>
         <CreditMeter acc={r.acc} balance={r.balance} cur={cur} />
-        <CertInfo acc={r.acc} balance={r.balance} cur={cur} />
+        <CertAccountInfo acc={r.acc} cur={cur} />
       </span>
       <b><BalanceText acc={r.acc} balance={r.balance} cur={cur} /></b>
     </button>
@@ -267,9 +169,20 @@ export default function Accounts() {
     <>
       {form !== undefined && <AccountForm acc={form} onClose={() => setForm(undefined)} />}
       {transfer !== undefined && <TransferSheet {...transfer} onClose={() => setTransfer(undefined)} />}
+      {certView && (
+        <CertDetail
+          accId={certView.accId}
+          certId={certView.certId}
+          onClose={() => setCertView(null)}
+          onEdit={() => setCertForm({ accId: certView.accId, cert: state.accounts.find((a) => a.id === certView.accId)?.certs?.find((c) => c.id === certView.certId) })}
+          onRedeem={() => setRedeem({ accId: certView.accId, cert: state.accounts.find((a) => a.id === certView.accId)?.certs?.find((c) => c.id === certView.certId) })}
+          onEditTx={setEditTx}
+        />
+      )}
+      {certForm && <CertForm accId={certForm.accId} cert={certForm.cert} onClose={() => setCertForm(null)} />}
+      {redeem && <RedeemSheet accId={redeem.accId} cert={redeem.cert} onClose={() => setRedeem(null)} />}
       {editTx && <AddSheet tx={editTx} onClose={() => setEditTx(null)} />}
       {addFor && <AddSheet preset={{ accountId: addFor }} onClose={() => setAddFor(null)} />}
-      {redeem && <RedeemSheet acc={redeem} onClose={() => setRedeem(null)} />}
     </>
   );
 
@@ -284,7 +197,8 @@ export default function Accounts() {
           onAdd={() => setAddFor(detailAcc.id)}
           onEditTx={setEditTx}
           onEditTransfer={(tr) => setTransfer({ transfer: tr })}
-          onRedeem={() => setRedeem(detailAcc)}
+          onAddCert={() => setCertForm({ accId: detailAcc.id, cert: null })}
+          onOpenCert={(c) => setCertView({ accId: detailAcc.id, certId: c.id })}
         />
         {sheets}
       </>
