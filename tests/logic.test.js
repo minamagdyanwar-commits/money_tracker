@@ -164,8 +164,6 @@ test('accountSummary reports available credit across active cards', () => {
   assert.equal(L.accountSummary([{ id: 'a', type: 'bank' }], [], [], '2026-10-31').hasLimits, false);
 });
 
-const accOf = (extra = {}) => ({ id: 'c', type: 'certificate', name: 'Cert', openingBalance: 100000, ...extra });
-
 test('accountLedger: opening, running balance and totals for a period', () => {
   const acc = { id: 'a', openingBalance: 1000 };
   const txs = [
@@ -222,46 +220,117 @@ test('interestFor: monthly, quarterly and at-maturity amounts', () => {
   assert.equal(L.interestFor({ rate: 10, every: 'monthly' }, -5), 0);
 });
 
-test('accrueInterest credits due interest once and is idempotent', () => {
-  const cert = accOf({ interest: { rate: 12, every: 'monthly', firstDate: '2026-09-01', payoutAccountId: 'bank', paid: [] } });
-  const data = { accounts: [cert, { id: 'bank', type: 'bank', openingBalance: 0 }], transactions: [], transfers: [] };
+
+const certAcc = (certs, extra = {}) => ({ id: 'c', type: 'certificate', name: 'Deposits', openingBalance: certs.reduce((a, x) => a + (x.openingAmount || 0), 0), certs, ...extra });
+const mkCert = (extra = {}) => ({ id: 'k1', name: 'Cert A', openingAmount: 100000, rate: 12, every: 'monthly', firstDate: '2026-09-01', payoutAccountId: 'bank', paid: [], ...extra });
+
+test('certBalance values each certificate on its own', () => {
+  const k1 = mkCert();
+  const k2 = mkCert({ id: 'k2', openingAmount: 0, name: 'Cert B' });
+  const acc = certAcc([k1, k2]);
+  const transfers = [{ id: 't', date: '2026-10-01', fromId: 'bank', toId: 'c', amount: 5000, certId: 'k2' }, { id: 't2', date: '2026-10-05', fromId: 'c', toId: 'bank', amount: 2000, certId: 'k1' }];
+  assert.equal(L.certBalance(acc, k1, [], transfers, '2026-10-31'), 98000);
+  assert.equal(L.certBalance(acc, k2, [], transfers, '2026-10-31'), 5000);
+  assert.equal(L.certBalance(acc, k2, [], transfers, '2026-09-30'), 0);
+  assert.equal(L.accountBalance(acc, [], transfers, '2026-10-31'), 100000 + 5000 - 2000);
+});
+
+test('accrueInterest: several certificates, each at its own rate, once only', () => {
+  const k1 = mkCert({ rate: 12 });
+  const k2 = mkCert({ id: 'k2', name: 'Cert B', openingAmount: 50000, rate: 24, every: 'quarterly', firstDate: '2026-10-01' });
+  const data = { accounts: [certAcc([k1, k2]), { id: 'bank', type: 'bank', openingBalance: 0 }], transactions: [], transfers: [] };
   const a = L.accrueInterest(data, '2026-10-05');
-  assert.equal(a.transactions.length, 2);
-  assert.ok(a.transactions.every((t) => t.type === 'income' && t.amount === 1000 && t.accountId === 'bank' && t.categoryId === 'i-interest'));
-  assert.deepEqual(a.accounts[0].interest.paid, ['2026-09-01', '2026-10-01']);
-  assert.equal(L.accrueInterest(a, '2026-10-05'), a); // nothing new -> same object
-  assert.equal(L.accrueInterest(a, '2026-11-01').transactions.length, 3);
-  // deleting a generated entry does not bring it back
-  const deleted = { ...a, transactions: [] };
-  assert.equal(L.accrueInterest(deleted, '2026-10-05').transactions.length, 0);
+  const byCert = (id) => a.transactions.filter((t) => t.certId === id);
+  assert.deepEqual(byCert('k1').map((t) => t.amount), [1000, 1000]); // 100000 * 12% / 12 for Sep 1 and Oct 1
+  assert.deepEqual(byCert('k2').map((t) => t.amount), [3000]); // 50000 * 24% / 4
+  assert.ok(a.transactions.every((t) => t.accountId === 'bank' && t.categoryId === 'i-interest' && t.autoInterest));
+  assert.equal(L.accrueInterest(a, '2026-10-05'), a);
+  assert.deepEqual(a.accounts[0].certs[1].paid, ['2026-10-01']);
 });
 
-test('accrueInterest into the certificate itself compounds', () => {
-  const cert = accOf({ openingBalance: 1200, interest: { rate: 12, every: 'monthly', firstDate: '2026-09-01', payoutAccountId: 'c', paid: [] } });
-  const a = L.accrueInterest({ accounts: [cert], transactions: [], transfers: [] }, '2026-10-05');
-  assert.deepEqual(a.transactions.map((t) => t.amount), [12, 12.12]);
+test('accrueInterest reinvesting compounds that certificate only', () => {
+  const k = mkCert({ openingAmount: 1200, payoutAccountId: '' });
+  const other = mkCert({ id: 'k2', name: 'Other', openingAmount: 1200, payoutAccountId: 'bank' });
+  const a = L.accrueInterest({ accounts: [certAcc([k, other]), { id: 'bank', type: 'bank' }], transactions: [], transfers: [] }, '2026-10-05');
+  assert.deepEqual(a.transactions.filter((t) => t.certId === 'k1').map((t) => t.amount), [12, 12.12]);
+  assert.deepEqual(a.transactions.filter((t) => t.certId === 'k2').map((t) => t.amount), [12, 12]);
+  assert.equal(L.certBalance(a.accounts[0], a.accounts[0].certs[0], a.transactions, [], '2026-10-05'), 1224.12);
 });
 
-test('nextInterest estimates the coming payout', () => {
-  const cert = accOf({ interest: { rate: 12, every: 'monthly', firstDate: '2026-09-15', paid: [] } });
-  assert.deepEqual(L.nextInterest(cert, 100000, '2026-10-20'), { date: '2026-11-15', amount: 1000 });
-  assert.equal(L.nextInterest({ ...cert, interest: { ...cert.interest, maturityDate: '2026-10-31' } }, 100000, '2026-10-20'), null);
+test('certSummary totals and upcoming payouts', () => {
+  const k1 = mkCert({ rate: 12, firstDate: '2026-09-15', paid: ['2026-09-15', '2026-10-15'] });
+  const k2 = mkCert({ id: 'k2', name: 'B', openingAmount: 50000, rate: 24, every: 'monthly', firstDate: '2026-09-20' });
+  const k3 = mkCert({ id: 'k3', name: 'C', openingAmount: 7000, closed: true });
+  const txs = [{ id: 'x', type: 'income', amount: 1000, certId: 'k1', autoInterest: true, accountId: 'bank', date: '2026-09-15' }];
+  const s = L.certSummary(certAcc([k1, k2, k3]), txs, [], '2026-10-20');
+  assert.equal(s.value, 150000);
+  assert.equal(s.earned, 1000);
+  assert.equal(s.yearly, 100000 * 0.12 + 50000 * 0.24);
+  assert.deepEqual(s.rows[0].next, { date: '2026-11-15', amount: 1000 });
+  assert.equal(s.rows[2].yearly, 0);
+  assert.equal(s.next30, 1000); // only k1 (11-15) falls within 30 days of 10-20; k2's next payout is 11-20
+  assert.equal(L.upcomingInterest(k1, 100000, '2026-10-20', 3).length, 3);
 });
 
-test('redeemCertificate: full redemption with extra interest and with penalty', () => {
-  const base = () => ({ accounts: [accOf({ interest: { rate: 10, every: 'monthly', firstDate: '2026-09-01', paid: [] } }), { id: 'bank', type: 'bank', openingBalance: 0 }], transactions: [], transfers: [] });
-  const more = L.redeemCertificate(base(), { accountId: 'c', principal: 100000, received: 101000, toId: 'bank', date: '2026-10-10' });
+test('redeemCertificate redeems one certificate and leaves the others', () => {
+  const k1 = mkCert();
+  const k2 = mkCert({ id: 'k2', name: 'B', openingAmount: 20000 });
+  const base = () => ({ accounts: [certAcc([k1, k2]), { id: 'bank', type: 'bank', openingBalance: 0 }], transactions: [], transfers: [] });
+  const more = L.redeemCertificate(base(), { accountId: 'c', certId: 'k1', principal: 100000, received: 101000, toId: 'bank', date: '2026-10-10' });
+  assert.equal(more.transfers[0].certId, 'k1');
   assert.equal(more.transfers[0].amount, 100000);
   assert.equal(more.transactions[0].amount, 1000);
-  assert.equal(more.accounts[0].archived, true);
-  assert.equal(more.accounts[0].interest.closed, true);
-  assert.equal(L.accountBalance(more.accounts[0], more.transactions, more.transfers, '2026-10-10'), 0);
-  assert.equal(L.accountBalance(more.accounts[1], more.transactions, more.transfers, '2026-10-10'), 101000);
-  const less = L.redeemCertificate(base(), { accountId: 'c', principal: 100000, received: 98000, toId: 'bank', date: '2026-10-10' });
-  assert.equal(less.transfers[0].amount, 98000);
+  assert.equal(more.accounts[0].certs[0].closed, true);
+  assert.equal(more.accounts[0].certs[1].closed, undefined);
+  assert.equal(L.certBalance(more.accounts[0], more.accounts[0].certs[0], more.transactions, more.transfers, '2026-10-10'), 0);
+  assert.equal(L.accountBalance(more.accounts[0], more.transactions, more.transfers, '2026-10-10'), 20000);
+  const less = L.redeemCertificate(base(), { accountId: 'c', certId: 'k1', principal: 100000, received: 98000, toId: 'bank', date: '2026-10-10' });
   assert.equal(less.transactions[0].type, 'expense');
-  assert.equal(L.accountBalance(less.accounts[0], less.transactions, less.transfers, '2026-10-10'), 0);
-  const part = L.redeemCertificate(base(), { accountId: 'c', principal: 40000, received: 40000, toId: 'bank', date: '2026-10-10' });
-  assert.equal(part.accounts[0].archived, undefined);
-  assert.equal(L.accountBalance(part.accounts[0], part.transactions, part.transfers, '2026-10-10'), 60000);
+  assert.equal(L.certBalance(less.accounts[0], less.accounts[0].certs[0], less.transactions, less.transfers, '2026-10-10'), 0);
+  const part = L.redeemCertificate(base(), { accountId: 'c', certId: 'k1', principal: 40000, received: 40000, toId: 'bank', date: '2026-10-10' });
+  assert.equal(part.accounts[0].certs[0].closed, undefined);
+  assert.equal(L.certBalance(part.accounts[0], part.accounts[0].certs[0], part.transactions, part.transfers, '2026-10-10'), 60000);
+});
+
+test('saveCert keeps the opening balance in step; deleteCert only when unused', () => {
+  const data = { accounts: [certAcc([])], transactions: [], transfers: [] };
+  const a = L.saveCert(data, 'c', mkCert({ openingAmount: 1000 }));
+  const b = L.saveCert(a, 'c', mkCert({ id: 'k2', openingAmount: 500 }));
+  assert.equal(b.accounts[0].openingBalance, 1500);
+  assert.equal(L.saveCert(b, 'c', mkCert({ openingAmount: 2000 })).accounts[0].certs.length, 2);
+  assert.equal(L.deleteCert(b, 'c', 'k2').accounts[0].openingBalance, 1000);
+  const used = { ...b, transfers: [{ id: 't', certId: 'k2', fromId: 'x', toId: 'c', amount: 1, date: '2026-01-01' }] };
+  assert.equal(L.deleteCert(used, 'c', 'k2'), used);
+});
+
+test('migrateCertificates turns the old single-interest account into one certificate', () => {
+  const old = { id: 'c', type: 'certificate', name: 'NBE', openingBalance: 30000, interest: { rate: 18, every: 'monthly', firstDate: '2026-09-01', payoutAccountId: 'bank', paid: ['2026-09-01'] } };
+  const reinv = { id: 'r', type: 'certificate', name: 'R', openingBalance: 1000, interest: { rate: 12, every: 'monthly', firstDate: '2026-09-01', payoutAccountId: 'r', paid: [] } };
+  const data = {
+    accounts: [old, reinv, { id: 'bank', type: 'bank' }],
+    transactions: [{ id: 'a', accountId: 'bank', sourceId: 'c', type: 'income', amount: 450 }, { id: 'b', accountId: 'bank', type: 'income', amount: 5 }],
+    transfers: [{ id: 't', fromId: 'bank', toId: 'c', amount: 10, date: '2026-01-01' }],
+  };
+  const m = L.migrateCertificates(data);
+  assert.equal(m.accounts[0].interest, undefined);
+  assert.deepEqual(m.accounts[0].certs[0], { id: 'c-c1', name: 'NBE', openingAmount: 30000, rate: 18, every: 'monthly', firstDate: '2026-09-01', startDate: undefined, maturityDate: undefined, payoutAccountId: 'bank', paid: ['2026-09-01'], closed: false });
+  assert.equal(m.accounts[1].certs[0].payoutAccountId, '');
+  assert.equal(m.transactions[0].certId, 'c-c1');
+  assert.equal(m.transactions[1].certId, undefined);
+  assert.equal(m.transfers[0].certId, 'c-c1');
+  assert.equal(L.migrateCertificates(m), m);
+});
+
+test('i18n: no duplicate keys and both languages have the same keys', async () => {
+  const fs = await import('node:fs');
+  const src = fs.readFileSync(new URL('../src/i18n.js', import.meta.url), 'utf8');
+  for (const [name, start] of [['ar', 'const ar = {'], ['en', 'const en = {']]) {
+    const from = src.indexOf(start);
+    const body = src.slice(from, src.indexOf('\n};', from));
+    const keys = [...body.matchAll(/'([a-zA-Z0-9_.\- ]+)':/g)].map((m) => m[1]);
+    const dupes = keys.filter((k, i) => keys.indexOf(k) !== i);
+    assert.deepEqual(dupes, [], `${name} has duplicate keys`);
+  }
+  const { DICT } = await import('../src/i18n.js');
+  assert.deepEqual(Object.keys(DICT.ar).sort(), Object.keys(DICT.en).sort());
 });
