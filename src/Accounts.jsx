@@ -1,10 +1,10 @@
 import { useState } from 'react';
 import { PALETTE, useApp } from './store.jsx';
-import { accountInUse, accountSummary, firstActiveAccount, fmt, isoDate } from './logic.js';
+import { accountInUse, accountSummary, deleteCerts, firstActiveAccount, fmt, isoDate } from './logic.js';
 import AddSheet from './AddSheet.jsx';
 import AccountPage from './AccountPage.jsx';
 import { ACCOUNT_TYPES, BalanceText, CertAccountInfo, CreditMeter } from './AccountBits.jsx';
-import { CertDetail, CertForm, RedeemSheet } from './CertSheets.jsx';
+import { BulkCertSheet, BulkEditSheet, CertDetail, CertForm, RedeemSheet } from './CertSheets.jsx';
 import { Field, Icon, Sheet, numericOnly, parseAmount } from './ui.jsx';
 
 function AccountForm({ acc, onClose }) {
@@ -133,7 +133,7 @@ export function TransferSheet({ transfer, fromId, toId, onClose }) {
 }
 
 export default function Accounts() {
-  const { state, t, accName } = useApp();
+  const { state, dispatch, t, toast, accName } = useApp();
   const [asOf, setAsOf] = useState(isoDate());
   const [detail, setDetail] = useState(null); // account id
   const [form, setForm] = useState(undefined); // undefined closed, null new, object edit
@@ -141,6 +141,8 @@ export default function Accounts() {
   const [editTx, setEditTx] = useState(null);
   const [addFor, setAddFor] = useState(null); // account id for a new entry
   const [certForm, setCertForm] = useState(null); // { accId, cert|null }
+  const [bulkAdd, setBulkAdd] = useState(null); // account id
+  const [bulkEdit, setBulkEdit] = useState(null); // { accId, ids, done }
   const [certView, setCertView] = useState(null); // { accId, certId }
   const [redeem, setRedeem] = useState(null); // { accId, cert }
   const cur = state.settings.currency;
@@ -179,6 +181,8 @@ export default function Accounts() {
           onEditTx={setEditTx}
         />
       )}
+      {bulkAdd && <BulkCertSheet accId={bulkAdd} onClose={() => setBulkAdd(null)} />}
+      {bulkEdit && <BulkEditSheet accId={bulkEdit.accId} certIds={bulkEdit.ids} onClose={() => setBulkEdit(null)} onDone={() => { bulkEdit.done(); setBulkEdit(null); }} />}
       {certForm && <CertForm accId={certForm.accId} cert={certForm.cert} onClose={() => setCertForm(null)} />}
       {redeem && <RedeemSheet accId={redeem.accId} cert={redeem.cert} onClose={() => setRedeem(null)} />}
       {editTx && <AddSheet tx={editTx} onClose={() => setEditTx(null)} />}
@@ -198,6 +202,15 @@ export default function Accounts() {
           onEditTx={setEditTx}
           onEditTransfer={(tr) => setTransfer({ transfer: tr })}
           onAddCert={() => setCertForm({ accId: detailAcc.id, cert: null })}
+          onAddMany={() => setBulkAdd(detailAcc.id)}
+          onBulkEdit={(ids, done) => setBulkEdit({ accId: detailAcc.id, ids, done })}
+          onBulkDelete={(ids, done) => {
+            if (!window.confirm(t('cert.confirmDeleteMany', { n: ids.length }))) return;
+            const { deleted, kept } = deleteCerts(state, detailAcc.id, ids);
+            dispatch({ type: 'cert/deleteMany', accountId: detailAcc.id, certIds: ids });
+            toast(t('cert.bulkDeleted', { n: deleted }) + (kept ? t('cert.deleteKept', { n: kept }) : ''));
+            done();
+          }}
           onOpenCert={(c) => setCertView({ accId: detailAcc.id, certId: c.id })}
         />
         {sheets}

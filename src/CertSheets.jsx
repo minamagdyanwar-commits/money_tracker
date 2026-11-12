@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useApp } from './store.jsx';
-import { addDays, addMonthsToDate, certBalance, certSummary, fmt, isoDate, newId } from './logic.js';
+import { addDays, addMonthsToDate, bulkEditCerts, buildCert, certBalance, certSummary, dueInterestDates, fmt, isoDate, newId, parseCertLines } from './logic.js';
 import { Field, Sheet, numericOnly, parseAmount } from './ui.jsx';
 import { certRateLine } from './AccountBits.jsx';
 
@@ -23,6 +23,7 @@ export function CertForm({ accId, cert, onClose }) {
   const [maturityDate, setMaturityDate] = useState(cert?.maturityDate ?? '');
   const [payTo, setPayTo] = useState(editing ? cert.payoutAccountId || 'self' : others[0]?.id ?? 'self');
   const [fundFrom, setFundFrom] = useState('');
+  const [includePast, setIncludePast] = useState(false);
   const value = parseAmount(amount) || 0;
   const rateValue = parseAmount(rate);
   const datesOk = every === 'maturity' ? startDate && maturityDate && maturityDate > startDate : firstDate;
@@ -31,23 +32,22 @@ export function CertForm({ accId, cert, onClose }) {
   const save = () => {
     const id = cert?.id ?? newId();
     const funded = !editing && fundFrom && value > 0;
-    dispatch({
-      type: 'cert/save',
-      accountId: accId,
-      cert: {
-        ...(cert || {}),
-        id,
-        name: name.trim(),
-        openingAmount: funded ? 0 : value,
-        rate: rateValue,
-        every,
-        firstDate: every === 'maturity' ? undefined : firstDate,
-        startDate: every === 'maturity' ? startDate : undefined,
-        maturityDate: maturityDate || undefined,
-        payoutAccountId: payTo === 'self' ? '' : payTo,
-        paid: cert?.paid ?? [],
-      },
-    });
+    const next = {
+      ...(cert || {}),
+      id,
+      name: name.trim(),
+      openingAmount: funded ? 0 : value,
+      rate: rateValue,
+      every,
+      firstDate: every === 'maturity' ? undefined : firstDate,
+      startDate: every === 'maturity' ? startDate : cert?.startDate,
+      maturityDate: maturityDate || undefined,
+      payoutAccountId: payTo === 'self' ? '' : payTo,
+      paid: cert?.paid ?? [],
+    };
+    // A new certificate does not backfill interest that came due before today unless asked to.
+    if (!editing && !includePast) next.paid = dueInterestDates(next, today);
+    dispatch({ type: 'cert/save', accountId: accId, cert: next });
     if (funded) dispatch({ type: 'transfer/save', transfer: { fromId: fundFrom, toId: accId, amount: value, date: today, note: name.trim(), certId: id } });
     toast(t('acc.saved'));
     onClose();
@@ -103,7 +103,12 @@ export function CertForm({ accId, cert, onClose }) {
           {others.map((a) => <option key={a.id} value={a.id}>{accName(a.id)}</option>)}
         </select>
       </Field>
-      <div className="muted small">{t('cert.pastHint')}</div>
+      {!editing && (
+        <>
+          <Field label={t('cert.includePast')}><input type="checkbox" checked={includePast} onChange={(e) => setIncludePast(e.target.checked)} /></Field>
+          <div className="muted small">{t('cert.includePastHint')}</div>
+        </>
+      )}
       <div className="muted small">{t('cert.autoHint')}</div>
       <button className="btn block" disabled={!valid} onClick={save}>{t('common.save')}</button>
       {editing && !used && <button className="btn danger" onClick={remove}>{t('cert.deleteBtn')}</button>}
@@ -217,6 +222,167 @@ export function CertDetail({ accId, certId, onClose, onEdit, onRedeem, onEditTx 
           </div>
         )}
       </div>
+    </Sheet>
+  );
+}
+
+const blankRow = (patch = {}) => ({ key: newId(), name: '', value: '', rate: '', startDate: isoDate(), every: 'monthly', maturityDate: '', ...patch });
+const rowBlank = (r) => !r.value && !r.rate && !r.name;
+const rowValid = (r) => parseAmount(r.value) > 0 && parseAmount(r.rate) > 0 && r.startDate && (r.every !== 'maturity' || r.maturityDate > r.startDate) && (!r.maturityDate || r.maturityDate > r.startDate);
+
+// Add many certificates at once: one row each (value, rate, date placed, payout frequency), or paste a list.
+export function BulkCertSheet({ accId, onClose }) {
+  const { state, dispatch, t, toast, accName } = useApp();
+  const today = isoDate();
+  const cur = state.settings.currency;
+  const others = state.accounts.filter((a) => !a.archived && a.id !== accId && a.type !== 'certificate');
+  const [rows, setRows] = useState([blankRow(), blankRow()]);
+  const [payTo, setPayTo] = useState(others[0]?.id ?? 'self');
+  const [includePast, setIncludePast] = useState(false);
+  const [pasteOpen, setPasteOpen] = useState(false);
+  const [pasteText, setPasteText] = useState('');
+  const [pasteMsg, setPasteMsg] = useState('');
+
+  const update = (key, patch) => setRows(rows.map((r) => (r.key === key ? { ...r, ...patch } : r)));
+  const addRow = () => {
+    const last = rows[rows.length - 1];
+    setRows([...rows, blankRow(last ? { rate: last.rate, startDate: last.startDate, every: last.every, maturityDate: last.maturityDate } : {})]);
+  };
+  const dupRow = (r) => setRows(rows.flatMap((x) => (x.key === r.key ? [x, { ...r, key: newId() }] : [x])));
+  const removeRow = (key) => setRows(rows.length > 1 ? rows.filter((r) => r.key !== key) : [blankRow()]);
+  const setAllEvery = (every) => every && setRows(rows.map((r) => ({ ...r, every })));
+  const importPaste = () => {
+    const { rows: parsed, skipped } = parseCertLines(pasteText, today);
+    if (parsed.length) {
+      const fresh = parsed.map((p) => blankRow({ value: String(p.value), rate: String(p.rate), startDate: p.startDate, every: p.every, maturityDate: p.maturityDate }));
+      setRows([...rows.filter((r) => !rowBlank(r)), ...fresh]);
+      setPasteText('');
+    }
+    setPasteMsg([parsed.length ? t('cert.pasted', { n: parsed.length }) : '', skipped ? t('cert.pasteSkipped', { n: skipped }) : ''].filter(Boolean).join(' · '));
+  };
+
+  const filled = rows.filter((r) => !rowBlank(r));
+  const valid = filled.length > 0 && filled.every(rowValid);
+  const total = filled.reduce((a, r) => a + (parseAmount(r.value) || 0), 0);
+  const yearly = filled.reduce((a, r) => a + ((parseAmount(r.value) || 0) * (parseAmount(r.rate) || 0)) / 100, 0);
+
+  const save = () => {
+    const certs = filled.map((r) => {
+      const value = parseAmount(r.value);
+      const rate = parseAmount(r.rate);
+      return buildCert(
+        { name: r.name.trim() || `${fmt(value)} · ${r.startDate}`, value, rate, every: r.every, startDate: r.startDate, maturityDate: r.maturityDate, payoutAccountId: payTo === 'self' ? '' : payTo },
+        today,
+        includePast
+      );
+    });
+    dispatch({ type: 'cert/saveMany', accountId: accId, certs });
+    toast(t('cert.bulkDone', { n: certs.length }));
+    onClose();
+  };
+
+  return (
+    <Sheet title={t('cert.bulkTitle')} onClose={onClose}>
+      <Field label={t('cert.payTo')}>
+        <select value={payTo} onChange={(e) => setPayTo(e.target.value)}>
+          <option value="self">{t('cert.reinvest')}</option>
+          {others.map((a) => <option key={a.id} value={a.id}>{accName(a.id)}</option>)}
+        </select>
+      </Field>
+      <Field label={t('cert.allEvery')}>
+        <select value="" onChange={(e) => setAllEvery(e.target.value)}>
+          <option value="">—</option>
+          {EVERY.map((k) => <option key={k} value={k}>{t('cert.' + k)}</option>)}
+        </select>
+      </Field>
+      <Field label={t('cert.includePast')}><input type="checkbox" checked={includePast} onChange={(e) => setIncludePast(e.target.checked)} /></Field>
+      <div className="muted small">{t('cert.includePastHint')}</div>
+
+      <button className="chip dash" style={{ alignSelf: 'flex-start' }} onClick={() => setPasteOpen(!pasteOpen)}>{t('cert.paste')}</button>
+      {pasteOpen && (
+        <div className="card">
+          <div className="muted small">{t('cert.pasteHint')}</div>
+          <textarea className="paste" rows={4} dir="ltr" placeholder={t('cert.pastePh')} value={pasteText} onChange={(e) => setPasteText(e.target.value)} />
+          <button className="btn small secondary" disabled={!pasteText.trim()} onClick={importPaste}>{t('cert.pasteBtn')}</button>
+          {pasteMsg && <div className="small muted">{pasteMsg}</div>}
+        </div>
+      )}
+
+      {rows.map((r, i) => (
+        <div className="card bulk-row" key={r.key}>
+          <div className="row between">
+            <h3>{t('cert.rowTitle', { n: i + 1 })}</h3>
+            <span className="row" style={{ gap: 4 }}>
+              <button className="btn small secondary" onClick={() => dupRow(r)}>{t('cert.dupRow')}</button>
+              <button className="iconbtn" aria-label={t('cert.removeRow')} onClick={() => removeRow(r.key)}>✕</button>
+            </span>
+          </div>
+          <div className="bulk-grid">
+            <label className="mini"><span>{t('cert.value')} ({cur})</span><input inputMode="decimal" placeholder="0" value={r.value} onChange={(e) => update(r.key, { value: numericOnly(e.target.value) })} /></label>
+            <label className="mini"><span>{t('cert.rateShort')}</span><input inputMode="decimal" placeholder="0" value={r.rate} onChange={(e) => update(r.key, { rate: numericOnly(e.target.value) })} /></label>
+            <label className="mini"><span>{t('cert.startDate')}</span><input type="date" value={r.startDate} onChange={(e) => update(r.key, { startDate: e.target.value })} /></label>
+            <label className="mini"><span>{t('cert.every')}</span>
+              <select value={r.every} onChange={(e) => update(r.key, { every: e.target.value })}>{EVERY.map((k) => <option key={k} value={k}>{t('cert.' + k)}</option>)}</select>
+            </label>
+            <label className="mini wide"><span>{t(r.every === 'maturity' ? 'cert.maturityDate' : 'cert.maturityOpt')}</span><input type="date" value={r.maturityDate} onChange={(e) => update(r.key, { maturityDate: e.target.value })} /></label>
+            <label className="mini wide"><span>{t('cert.nameOpt')}</span><input type="text" value={r.name} onChange={(e) => update(r.key, { name: e.target.value })} /></label>
+          </div>
+        </div>
+      ))}
+      <button className="chip dash" style={{ alignSelf: 'flex-start' }} onClick={addRow}>{t('cert.addRow')}</button>
+
+      {filled.length > 0 && <div className="muted small bold">{t('cert.bulkSummary', { n: filled.length, total: fmt(total) + ' ' + cur, yearly: fmt(yearly) + ' ' + cur })}</div>}
+      {filled.length > 0 && !valid && <div className="small bad-text">{t('cert.bulkNeed')}</div>}
+      <button className="btn block" disabled={!valid} onClick={save}>{t('cert.bulkSave', { n: filled.length })}</button>
+    </Sheet>
+  );
+}
+
+// Change the terms of the selected certificates in one go; anything left on "no change" stays as it is.
+export function BulkEditSheet({ accId, certIds, onClose, onDone }) {
+  const { state, dispatch, t, toast, accName } = useApp();
+  const others = state.accounts.filter((a) => !a.archived && a.id !== accId && a.type !== 'certificate');
+  const [rate, setRate] = useState('');
+  const [every, setEvery] = useState('');
+  const [payTo, setPayTo] = useState('');
+  const [maturity, setMaturity] = useState('');
+  const [clearMaturity, setClearMaturity] = useState(false);
+  const rateValue = parseAmount(rate);
+  const changes = {};
+  if (rateValue > 0) changes.rate = rateValue;
+  if (every) changes.every = every;
+  if (payTo) changes.payoutAccountId = payTo === 'self' ? '' : payTo;
+  if (clearMaturity) changes.maturityDate = '';
+  else if (maturity) changes.maturityDate = maturity;
+  const any = Object.keys(changes).length > 0;
+
+  const apply = () => {
+    const { edited, skipped } = bulkEditCerts(state, accId, certIds, changes, isoDate());
+    dispatch({ type: 'cert/bulkEdit', accountId: accId, certIds, changes });
+    toast(t('cert.bulkEdited', { n: edited }) + (skipped ? t('cert.bulkSkipped', { n: skipped }) : ''));
+    onDone();
+  };
+
+  return (
+    <Sheet title={t('cert.bulkEditTitle', { n: certIds.length })} onClose={onClose}>
+      <div className="muted small">{t('cert.bulkEditHint')}</div>
+      <Field label={t('cert.newRate')}><input inputMode="decimal" placeholder={t('cert.keep')} value={rate} onChange={(e) => setRate(numericOnly(e.target.value))} /></Field>
+      <Field label={t('cert.every')}>
+        <select value={every} onChange={(e) => setEvery(e.target.value)}>
+          <option value="">{t('cert.keep')}</option>
+          {EVERY.map((k) => <option key={k} value={k}>{t('cert.' + k)}</option>)}
+        </select>
+      </Field>
+      <Field label={t('cert.payTo')}>
+        <select value={payTo} onChange={(e) => setPayTo(e.target.value)}>
+          <option value="">{t('cert.keep')}</option>
+          <option value="self">{t('cert.reinvest')}</option>
+          {others.map((a) => <option key={a.id} value={a.id}>{accName(a.id)}</option>)}
+        </select>
+      </Field>
+      <Field label={t('cert.maturityDate')}><input type="date" disabled={clearMaturity} value={maturity} onChange={(e) => setMaturity(e.target.value)} /></Field>
+      <Field label={t('cert.clearMaturity')}><input type="checkbox" checked={clearMaturity} onChange={(e) => setClearMaturity(e.target.checked)} /></Field>
+      <button className="btn block" disabled={!any} onClick={apply}>{t('cert.applyEdit', { n: certIds.length })}</button>
     </Sheet>
   );
 }

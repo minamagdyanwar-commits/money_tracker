@@ -9,7 +9,7 @@ const PAGE = 25;
 
 // One account in full: balance, certificate / card details, a period selector with summary and charts,
 // and the complete history (entries and transfers) with the balance after each, tap to edit.
-export default function AccountPage({ acc, onBack, onEdit, onTransfer, onAdd, onEditTx, onEditTransfer, onAddCert, onOpenCert }) {
+export default function AccountPage({ acc, onBack, onEdit, onTransfer, onAdd, onEditTx, onEditTransfer, onAddCert, onAddMany, onOpenCert, onBulkEdit, onBulkDelete }) {
   const { state, t, catName, catColor, accName, dayLabel } = useApp();
   const today = isoDate();
   const cur = state.settings.currency;
@@ -20,6 +20,8 @@ export default function AccountPage({ acc, onBack, onEdit, onTransfer, onAdd, on
   const [query, setQuery] = useState('');
   const [limit, setLimit] = useState(PAGE);
   const [certFilter, setCertFilter] = useState('all');
+  const [selecting, setSelecting] = useState(false);
+  const [picked, setPicked] = useState([]);
 
   const range = preset === 'custom' ? { from: customFrom, to: customTo } : periodRange(preset, today);
   const validRange = !range.from || !range.to || range.from <= range.to;
@@ -81,6 +83,7 @@ export default function AccountPage({ acc, onBack, onEdit, onTransfer, onAdd, on
         <button className="btn small" onClick={onAdd}>{t('acc.addEntry')}</button>
         <button className="btn small secondary" onClick={onTransfer}>{t('acc.transfer')}</button>
         {isCert && <button className="btn small secondary" onClick={onAddCert}>{t('cert.add')}</button>}
+        {isCert && <button className="btn small secondary" onClick={onAddMany}>{t('cert.addMany')}</button>}
         <button className="btn small secondary" onClick={onEdit}>{t('common.edit')}</button>
       </div>
 
@@ -97,21 +100,41 @@ export default function AccountPage({ acc, onBack, onEdit, onTransfer, onAdd, on
                 <div className="stat"><div>{t('cert.next30')}</div><div dir="ltr">{fmt(summary.next30)}</div></div>
                 <div className="stat"><div>{t('cert.earned')}</div><div dir="ltr">{fmt(summary.earned)}</div></div>
               </div>
-              <div className="list">
-                {summary.rows.map((r) => (
-                  <button key={r.cert.id} className="item" style={{ opacity: r.cert.closed ? 0.55 : 1 }} onClick={() => onOpenCert(r.cert)}>
-                    <span className="grow">
-                      <div className="bold">{r.cert.name} {r.cert.closed && <span className="tag plain">{t('cert.closed')}</span>}</div>
-                      <div className="muted small">{certRateLine(t, r.cert)}</div>
-                      {r.next && <div className="small">{t('cert.next', { date: dayLabel(r.next.date), amt: fmt(r.next.amount) + ' ' + cur })}</div>}
-                    </span>
-                    <b dir="ltr">{fmt(r.balance)}</b>
-                  </button>
-                ))}
+              <div className="row between">
+                <span className="muted small">{selecting ? t('cert.selected', { n: picked.length }) : ''}</span>
+                <span className="row" style={{ gap: 6 }}>
+                  {selecting && <button className="btn small secondary" onClick={() => setPicked(picked.length === summary.rows.length ? [] : summary.rows.map((r) => r.cert.id))}>{t('cert.selectAll')}</button>}
+                  <button className="btn small secondary" onClick={() => { setSelecting(!selecting); setPicked([]); }}>{selecting ? t('cert.selectDone') : t('cert.select')}</button>
+                </span>
               </div>
+              <div className="list">
+                {summary.rows.map((r) => {
+                  const on = picked.includes(r.cert.id);
+                  return (
+                    <button key={r.cert.id} className="item" style={{ opacity: r.cert.closed ? 0.55 : 1 }} onClick={() => (selecting ? setPicked(on ? picked.filter((x) => x !== r.cert.id) : [...picked, r.cert.id]) : onOpenCert(r.cert))}>
+                      {selecting && <input type="checkbox" checked={on} readOnly tabIndex={-1} aria-label={r.cert.name} style={{ width: 22, height: 22, flex: 'none' }} />}
+                      <span className="grow">
+                        <div className="bold">{r.cert.name} {r.cert.closed && <span className="tag plain">{t('cert.closed')}</span>}</div>
+                        <div className="muted small">{certRateLine(t, r.cert)}</div>
+                        {r.next && <div className="small">{t('cert.next', { date: dayLabel(r.next.date) + (r.next.date.slice(0, 4) !== today.slice(0, 4) ? ' ' + r.next.date.slice(0, 4) : ''), amt: fmt(r.next.amount) + ' ' + cur })}</div>}
+                      </span>
+                      <b dir="ltr">{fmt(r.balance)}</b>
+                    </button>
+                  );
+                })}
+              </div>
+              {selecting && picked.length > 0 && (
+                <div className="pair" style={{ gap: 10 }}>
+                  <button className="btn" onClick={() => onBulkEdit(picked, () => { setSelecting(false); setPicked([]); })}>{t('cert.editSelected', { n: picked.length })}</button>
+                  <button className="btn danger" onClick={() => onBulkDelete(picked, () => { setSelecting(false); setPicked([]); })}>{t('cert.deleteSelected')}</button>
+                </div>
+              )}
             </>
           )}
-          <button className="btn secondary" onClick={onAddCert}>{t('cert.add')}</button>
+          <div className="pair" style={{ gap: 10 }}>
+            <button className="btn secondary" onClick={onAddCert}>{t('cert.add')}</button>
+            <button className="btn secondary" onClick={onAddMany}>{t('cert.addMany')}</button>
+          </div>
         </div>
       )}
 
