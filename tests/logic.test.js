@@ -334,3 +334,87 @@ test('i18n: no duplicate keys and both languages have the same keys', async () =
   const { DICT } = await import('../src/i18n.js');
   assert.deepEqual(Object.keys(DICT.ar).sort(), Object.keys(DICT.en).sort());
 });
+
+test('buildCert: first interest one period after the start date; past interest skipped unless asked', () => {
+  const terms = { name: 'A', value: 100000, rate: 18, every: 'monthly', startDate: '2026-08-10', payoutAccountId: 'bank' };
+  const skip = L.buildCert(terms, '2026-11-12');
+  assert.equal(skip.firstDate, '2026-09-10');
+  assert.deepEqual(skip.paid, ['2026-09-10', '2026-10-10', '2026-11-10']);
+  assert.equal(skip.openingAmount, 100000);
+  const incl = L.buildCert(terms, '2026-11-12', true);
+  assert.deepEqual(incl.paid, []);
+  const q = L.buildCert({ ...terms, every: 'quarterly' }, '2026-11-12');
+  assert.equal(q.firstDate, '2026-11-10');
+  assert.deepEqual(q.paid, ['2026-11-10']);
+  const m = L.buildCert({ ...terms, every: 'maturity', maturityDate: '2027-08-10' }, '2026-11-12');
+  assert.equal(m.firstDate, undefined);
+  assert.deepEqual(m.paid, []);
+});
+
+test('buildCert then accrue: only future payouts are credited when past interest is skipped', () => {
+  const c = L.buildCert({ name: 'A', value: 12000, rate: 12, every: 'monthly', startDate: '2026-08-10', payoutAccountId: 'bank' }, '2026-11-12');
+  const data = { accounts: [{ id: 'c', type: 'certificate', openingBalance: 12000, certs: [c] }, { id: 'bank', type: 'bank' }], transactions: [], transfers: [] };
+  assert.equal(L.accrueInterest(data, '2026-11-12'), data);
+  const later = L.accrueInterest(data, '2026-12-11');
+  assert.deepEqual(later.transactions.map((t) => [t.date, t.amount]), [['2026-12-10', 120]]);
+});
+
+test('saveCerts adds many at once and keeps the opening balance as their sum', () => {
+  const base = { accounts: [{ id: 'c', type: 'certificate', certs: [] }], transactions: [], transfers: [] };
+  const certs = [1, 2, 3].map((i) => L.buildCert({ name: 'C' + i, value: i * 1000, rate: 10, every: 'yearly', startDate: '2026-01-01' }, '2026-11-12'));
+  const out = L.saveCerts(base, 'c', certs);
+  assert.equal(out.accounts[0].certs.length, 3);
+  assert.equal(out.accounts[0].openingBalance, 6000);
+});
+
+test('bulkEditCerts: rate and payout account for many; frequency re-anchors after today; skips what cannot', () => {
+  const mk = (id, extra = {}) => ({ id, name: id, openingAmount: 1000, rate: 10, every: 'monthly', startDate: '2026-08-10', firstDate: '2026-09-10', payoutAccountId: 'bank', paid: [], ...extra });
+  const data = { accounts: [{ id: 'c', type: 'certificate', certs: [mk('a'), mk('b'), mk('old', { startDate: undefined }), mk('closed', { closed: true })] }], transactions: [], transfers: [] };
+  const r1 = L.bulkEditCerts(data, 'c', ['a', 'b', 'closed'], { rate: 15, payoutAccountId: '' }, '2026-11-12');
+  assert.deepEqual(r1.data.accounts[0].certs.map((c) => [c.rate, c.payoutAccountId]), [[15, ''], [15, ''], [10, 'bank'], [10, 'bank']]);
+  assert.equal(r1.edited, 2);
+  const r2 = L.bulkEditCerts(data, 'c', ['a'], { every: 'quarterly' }, '2026-11-12');
+  assert.equal(r2.data.accounts[0].certs[0].every, 'quarterly');
+  assert.equal(r2.data.accounts[0].certs[0].firstDate, '2027-02-10'); // 08-10 +3,+6 (11-10 is past), next 2027-02-10? 
+  const r3 = L.bulkEditCerts(data, 'c', ['a'], { every: 'maturity' }, '2026-11-12');
+  assert.equal(r3.skipped, 1); // no maturity date to pay out on
+  const r4 = L.bulkEditCerts(data, 'c', ['a', 'b'], { every: 'maturity', maturityDate: '2027-08-10' }, '2026-11-12');
+  assert.equal(r4.data.accounts[0].certs[0].firstDate, undefined);
+  assert.equal(r4.data.accounts[0].certs[0].maturityDate, '2027-08-10');
+});
+
+test('deleteCerts removes the unused ones only', () => {
+  const data = { accounts: [{ id: 'c', type: 'certificate', certs: [{ id: 'a', openingAmount: 1 }, { id: 'b', openingAmount: 2 }] }], transactions: [{ id: 't', certId: 'b' }], transfers: [] };
+  const r = L.deleteCerts(data, 'c', ['a', 'b']);
+  assert.equal(r.deleted, 1);
+  assert.equal(r.kept, 1);
+  assert.deepEqual(r.data.accounts[0].certs.map((c) => c.id), ['b']);
+});
+
+test('parseEvery / parseDateText understand English, Arabic and spreadsheet formats', () => {
+  assert.equal(L.parseEvery('شهري'), 'monthly');
+  assert.equal(L.parseEvery('Quarterly'), 'quarterly');
+  assert.equal(L.parseEvery('ربع سنوي'), 'quarterly');
+  assert.equal(L.parseEvery('نصف سنوي'), 'semiannual');
+  assert.equal(L.parseEvery('Annual'), 'yearly');
+  assert.equal(L.parseEvery('في آخر المدة'), 'maturity');
+  assert.equal(L.parseEvery('whenever'), null);
+  assert.equal(L.parseDateText('2026-03-01'), '2026-03-01');
+  assert.equal(L.parseDateText('01/05/2026'), '2026-05-01');
+  assert.equal(L.parseDateText('١٥/٠٣/٢٠٢٦'), '2026-03-15');
+  assert.equal(L.parseDateText('31/02/2026'), null);
+  assert.equal(L.parseDateText('soon'), null);
+});
+
+test('parseCertLines reads pasted rows and counts the unreadable ones', () => {
+  const text = ['100000, 18, 2026-03-01, شهري', '50,000\t21%\t01/05/2026\tربع سنوي', '٢٠٠٠٠;١٥;١٠/٠٦/٢٠٢٦;Annual', '75000 | 17 | 2026-02-01 | maturity | 2027-02-01', 'garbage line', '1000, 0, 2026-01-01, monthly', '30000, 19'].join('\n');
+  const { rows, skipped } = L.parseCertLines(text, '2026-11-12');
+  assert.equal(skipped, 2);
+  assert.deepEqual(rows.map((r) => [r.value, r.rate, r.startDate, r.every, r.maturityDate]), [
+    [100000, 18, '2026-03-01', 'monthly', ''],
+    [50000, 21, '2026-05-01', 'quarterly', ''],
+    [20000, 15, '2026-06-10', 'yearly', ''],
+    [75000, 17, '2026-02-01', 'maturity', '2027-02-01'],
+    [30000, 19, '2026-11-12', 'monthly', ''],
+  ]);
+});

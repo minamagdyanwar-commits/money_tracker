@@ -1,6 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useReducer, useRef, useState } from 'react';
 import { loadState, requestPersistence, saveState } from './db.js';
-import { INTEREST_CATEGORY, accountInUse, accrueInterest, deleteCert, firstActiveAccount, isValidBackup, isoDate, migrateCertificates, monthOf, newId, payKey, redeemCertificate, saveCert } from './logic.js';
+import { INTEREST_CATEGORY, accountInUse, accrueInterest, bulkEditCerts, deleteCert, deleteCerts, firstActiveAccount, isValidBackup, isoDate, migrateCertificates, monthOf, newId, payKey, redeemCertificate, saveCert, saveCerts } from './logic.js';
 import { DEFAULT_ACCOUNT_NAMES, DEFAULT_CATEGORY_NAMES, MONTHS, MONTHS_SHORT, detectLang, translate } from './i18n.js';
 
 export const DEFAULT_ACCOUNT_ID = 'acc-main';
@@ -125,6 +125,12 @@ export function reducer(state, action) {
       return accrueInterest(state, action.today);
     case 'cert/save':
       return saveCert(state, action.accountId, action.cert);
+    case 'cert/saveMany':
+      return saveCerts(state, action.accountId, action.certs);
+    case 'cert/bulkEdit':
+      return bulkEditCerts(state, action.accountId, action.certIds, action.changes, isoDate()).data;
+    case 'cert/deleteMany':
+      return deleteCerts(state, action.accountId, action.certIds).data;
     case 'cert/delete':
       return deleteCert(state, action.accountId, action.certId);
     case 'cert/redeem':

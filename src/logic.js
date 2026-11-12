@@ -582,3 +582,132 @@ export function migrateCertificates(data) {
   });
   return changed ? { ...data, accounts, transactions: txs, transfers } : data;
 }
+
+// ---- bulk certificates ------------------------------------------------------
+
+// A certificate from its terms. `startDate` is the day it was placed: the first interest is one period
+// later. Unless `includePast`, interest that already came due before today is marked as handled
+// (the user has already received and logged it), so only future payouts are credited.
+export function buildCert({ name, value, rate, every, startDate, maturityDate, payoutAccountId }, today, includePast = false) {
+  const cert = {
+    id: newId(),
+    name,
+    openingAmount: value,
+    rate,
+    every,
+    startDate,
+    maturityDate: maturityDate || undefined,
+    firstDate: every === 'maturity' ? undefined : addMonthsToDate(startDate, EVERY_MONTHS[every]),
+    payoutAccountId: payoutAccountId || '',
+    paid: [],
+  };
+  return includePast ? cert : { ...cert, paid: dueInterestDates(cert, today) };
+}
+
+export const saveCerts = (data, accountId, certs) => certs.reduce((acc, cert) => saveCert(acc, accountId, cert), data);
+
+// Change the terms of several certificates at once. Only the keys present in `changes` are touched
+// (rate, every, payoutAccountId, maturityDate). A new frequency re-anchors the schedule on the day
+// the certificate was placed, starting after today. Certificates that cannot be re-anchored
+// (no start date to anchor on) are skipped and counted.
+export function bulkEditCerts(data, accountId, certIds, changes, today) {
+  const ids = new Set(certIds);
+  let skipped = 0;
+  let edited = 0;
+  const accounts = data.accounts.map((acc) => {
+    if (acc.id !== accountId) return acc;
+    const certs = (acc.certs || []).map((cert) => {
+      if (!ids.has(cert.id) || cert.closed) return cert;
+      let next = { ...cert };
+      if (changes.rate !== undefined) next.rate = changes.rate;
+      if (changes.payoutAccountId !== undefined) next.payoutAccountId = changes.payoutAccountId;
+      if (changes.maturityDate !== undefined) next.maturityDate = changes.maturityDate || undefined;
+      if (changes.every !== undefined && changes.every !== cert.every) {
+        const anchor = cert.startDate || cert.firstDate;
+        if (!anchor || (changes.every === 'maturity' && !next.maturityDate)) {
+          skipped += 1;
+          return cert;
+        }
+        next.every = changes.every;
+        if (changes.every === 'maturity') {
+          next.startDate = anchor;
+          next.firstDate = undefined;
+        } else {
+          const step = EVERY_MONTHS[changes.every];
+          let k = 1;
+          while (addMonthsToDate(anchor, k * step) <= today && k < 600) k++;
+          next.startDate = cert.startDate || anchor;
+          next.firstDate = addMonthsToDate(anchor, k * step);
+        }
+      }
+      edited += 1;
+      return next;
+    });
+    return { ...acc, certs };
+  });
+  return { data: { ...data, accounts }, edited, skipped };
+}
+
+// Deletes the unused ones among `certIds`; the rest (they have entries) stay.
+export function deleteCerts(data, accountId, certIds) {
+  let out = data;
+  let deleted = 0;
+  for (const id of certIds) {
+    const before = out;
+    out = deleteCert(out, accountId, id);
+    if (out !== before) deleted += 1;
+  }
+  return { data: out, deleted, kept: certIds.length - deleted };
+}
+
+const EASTERN_DIGITS = '٠١٢٣٤٥٦٧٨٩';
+const westernDigits = (s) => s.replace(/[٠-٩]/g, (d) => String(EASTERN_DIGITS.indexOf(d))).replace(/٫/g, '.').replace(/٬/g, ',');
+const EVERY_WORDS = {
+  monthly: ['monthly', 'month', 'm', '1', 'شهري', 'شهر', 'كل شهر'],
+  quarterly: ['quarterly', 'quarter', 'q', '3', 'ربع سنوي', 'ربع', 'كل 3 شهور', 'كل ٣ شهور'],
+  semiannual: ['semiannual', 'semi-annual', 'semi', 'half', '6', 'نصف سنوي', 'نصف', 'كل 6 شهور'],
+  yearly: ['yearly', 'annual', 'annually', 'year', 'y', '12', 'سنوي', 'سنة', 'كل سنة'],
+  maturity: ['maturity', 'at maturity', 'end', 'في آخر المدة', 'آخر المدة', 'اخر المدة', 'نهاية المدة', 'عند الاستحقاق'],
+};
+export function parseEvery(text) {
+  const w = westernDigits(String(text || '')).trim().toLowerCase();
+  return Object.keys(EVERY_WORDS).find((k) => EVERY_WORDS[k].includes(w)) || null;
+}
+
+export function parseDateText(text) {
+  const w = westernDigits(String(text || '')).trim();
+  let m = w.match(/^(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})$/);
+  let y;
+  let mo;
+  let d;
+  if (m) [, y, mo, d] = m;
+  else if ((m = w.match(/^(\d{1,2})[-/.](\d{1,2})[-/.](\d{2,4})$/))) {
+    [, d, mo, y] = m; // day first
+    if (y.length === 2) y = '20' + y;
+  } else return null;
+  const date = `${y}-${pad2(Number(mo))}-${pad2(Number(d))}`;
+  return Number(mo) >= 1 && Number(mo) <= 12 && Number(d) >= 1 && Number(d) <= daysInMonth(`${y}-${pad2(Number(mo))}`) ? date : null;
+}
+
+// Lines of "value, rate, start date, frequency[, maturity date]" separated by tabs, commas, semicolons or |.
+// Pasted from a spreadsheet this just works. Unreadable lines are counted, not guessed.
+export function parseCertLines(text, today) {
+  const rows = [];
+  let skipped = 0;
+  for (const raw of String(text || '').split(/\r?\n/)) {
+    const line = raw.trim();
+    if (!line) continue;
+    const cells = line.split(/\t|;|\||,(?=\s*\D*\d{1,2}\s*,)|,(?!\d{3}\b)/).map((c) => c.trim());
+    const value = parseFloat(westernDigits(cells[0] || '').replace(/[,\s]/g, ''));
+    const rate = parseFloat(westernDigits(cells[1] || '').replace('%', '').replace(',', '.'));
+    const startDate = cells[2] ? parseDateText(cells[2]) : today;
+    const every = cells[3] ? parseEvery(cells[3]) : 'monthly';
+    const maturityDate = cells[4] ? parseDateText(cells[4]) : '';
+    if (!(value > 0) || !(rate > 0) || !startDate || !every || (cells[4] && !maturityDate)) {
+      skipped += 1;
+      continue;
+    }
+    rows.push({ value, rate, startDate, every, maturityDate: maturityDate || '' });
+  }
+  return { rows, skipped };
+}
