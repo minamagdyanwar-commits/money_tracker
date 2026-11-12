@@ -313,3 +313,185 @@ export function accountInUse(accId, txs, transfers, recurring = []) {
 }
 
 export const firstActiveAccount = (accounts) => (accounts.find((a) => !a.archived) || accounts[0] || {}).id;
+
+// ---- account ledger (history of one account) ------------------------------
+
+const dayMs = 86400000;
+export const parseDay = (d) => new Date(d + 'T00:00:00');
+export const addDays = (date, n) => isoDate(new Date(parseDay(date).getTime() + n * dayMs));
+export const diffDays = (a, b) => Math.round((parseDay(b) - parseDay(a)) / dayMs);
+
+// Every entry and transfer that touched the account between `from` and `to` (inclusive, '' = open ended),
+// oldest first, each with the account balance right after it. `opening` is the balance before `from`.
+export function accountLedger(acc, txs, transfers, from = '', to = '') {
+  const all = accountActivity(acc.id, txs, transfers).reverse(); // oldest first (stable for same-day items)
+  let running = acc.openingBalance || 0;
+  const rows = [];
+  let opening = running;
+  for (const it of all) {
+    if (from && it.date < from) {
+      running += it.delta;
+      opening = running;
+      continue;
+    }
+    if (to && it.date > to) break;
+    running += it.delta;
+    rows.push({ ...it, balanceAfter: running });
+  }
+  const inTotal = rows.reduce((a, r) => a + (r.delta > 0 ? r.delta : 0), 0);
+  const outTotal = rows.reduce((a, r) => a + (r.delta < 0 ? -r.delta : 0), 0);
+  return { rows, opening, closing: opening + inTotal - outTotal, inTotal, outTotal };
+}
+
+// Balance over time for a chart: daily up to ~2 months, weekly up to ~13 months, monthly beyond.
+export function balanceSeries(ledger, from, to) {
+  if (!from || !to || from > to) return [];
+  const span = diffDays(from, to);
+  const step = span <= 62 ? 1 : span <= 400 ? 7 : 30;
+  const points = [];
+  let i = 0;
+  let balance = ledger.opening;
+  for (let d = from; ; d = addDays(d, step)) {
+    const end = d > to ? to : d;
+    while (i < ledger.rows.length && ledger.rows[i].date <= end) balance = ledger.rows[i++].balanceAfter;
+    points.push({ date: end, value: balance });
+    if (end >= to) break;
+  }
+  return points;
+}
+
+// Money in / out per month for a list of ledger rows.
+export function monthlyFlow(rows, months) {
+  const idx = new Map(months.map((m, i) => [m, i]));
+  const inn = months.map(() => 0);
+  const out = months.map(() => 0);
+  for (const r of rows) {
+    const i = idx.get(monthOf(r.date));
+    if (i === undefined) continue;
+    if (r.delta > 0) inn[i] += r.delta;
+    else out[i] += -r.delta;
+  }
+  return { income: inn, expense: out };
+}
+
+// Start of the period for a preset ('month' | '3m' | '6m' | 'year' | 'all').
+export function periodRange(preset, today) {
+  const m = monthOf(today);
+  if (preset === 'month') return { from: `${m}-01`, to: today };
+  if (preset === '3m') return { from: `${addMonths(m, -2)}-01`, to: today };
+  if (preset === '6m') return { from: `${addMonths(m, -5)}-01`, to: today };
+  if (preset === 'year') return { from: `${today.slice(0, 4)}-01-01`, to: today };
+  return { from: '', to: '' };
+}
+
+// ---- certificates and scheduled interest -----------------------------------
+// A certificate is an account (type 'certificate') with `interest`:
+//   { rate (% per year), every: 'monthly'|'quarterly'|'semiannual'|'yearly'|'maturity',
+//     firstDate (first payout), startDate (for 'maturity'), maturityDate?, payoutAccountId, paid: [dates], closed? }
+// Interest is credited as income entries, so it shows up in history, charts and analytics.
+
+export const INTEREST_CATEGORY = 'i-interest';
+export const EVERY_MONTHS = { monthly: 1, quarterly: 3, semiannual: 6, yearly: 12 };
+
+// Same day of month n months later, clamped to the length of that month (31 Jan + 1 month = 28 Feb).
+export function addMonthsToDate(date, n) {
+  const [y, m, d] = date.split('-').map(Number);
+  const target = addMonths(`${y}-${pad2(m)}`, n);
+  return `${target}-${pad2(Math.min(d, daysInMonth(target)))}`;
+}
+
+export function monthsBetween(a, b) {
+  const [ya, ma, da] = a.split('-').map(Number);
+  const [yb, mb, db] = b.split('-').map(Number);
+  return (yb - ya) * 12 + (mb - ma) + (db - da) / 30;
+}
+
+export const round2 = (n) => Math.round(n * 100) / 100;
+
+// Payout dates that are due (<= today) and not paid yet, oldest first.
+export function dueInterestDates(it, today) {
+  if (!it || it.closed || !(it.rate > 0)) return [];
+  const paid = new Set(it.paid || []);
+  const out = [];
+  if (it.every === 'maturity') {
+    if (it.maturityDate && it.maturityDate <= today && !paid.has(it.maturityDate)) out.push(it.maturityDate);
+    return out;
+  }
+  const step = EVERY_MONTHS[it.every];
+  if (!step || !it.firstDate) return [];
+  for (let k = 0; k < 240; k++) {
+    const d = addMonthsToDate(it.firstDate, k * step);
+    if (d > today || (it.maturityDate && d > it.maturityDate)) break;
+    if (!paid.has(d)) out.push(d);
+  }
+  return out;
+}
+
+export function interestFor(it, balance, date) {
+  const months = it.every === 'maturity' ? monthsBetween(it.startDate || date, date) : EVERY_MONTHS[it.every];
+  return round2((Math.max(balance, 0) * it.rate * months) / 1200);
+}
+
+// Next payout after `today` with an estimate based on today's balance (null if none is left).
+export function nextInterest(acc, balance, today) {
+  const it = acc.interest;
+  if (!it || it.closed || !(it.rate > 0)) return null;
+  let date = null;
+  if (it.every === 'maturity') {
+    if (it.maturityDate && it.maturityDate > today) date = it.maturityDate;
+  } else if (it.firstDate && EVERY_MONTHS[it.every]) {
+    const step = EVERY_MONTHS[it.every];
+    for (let k = 0; k < 240; k++) {
+      const d = addMonthsToDate(it.firstDate, k * step);
+      if (it.maturityDate && d > it.maturityDate) break;
+      if (d > today) {
+        date = d;
+        break;
+      }
+    }
+  }
+  return date ? { date, amount: interestFor(it, balance, date) } : null;
+}
+
+// Credits all interest that has come due. Returns the same object when nothing was due,
+// so callers can skip saving. Paying into the certificate itself compounds it.
+export function accrueInterest(data, today) {
+  let txs = data.transactions;
+  let changed = false;
+  const accounts = data.accounts.map((acc) => {
+    const it = acc.interest;
+    if (acc.type !== 'certificate' || !it) return acc;
+    const dates = dueInterestDates(it, today);
+    if (!dates.length) return acc;
+    const paid = [...(it.paid || [])];
+    for (const d of dates) {
+      const amount = interestFor(it, accountBalance(acc, txs, data.transfers, d), d);
+      if (amount > 0) {
+        txs = [...txs, { id: newId(), type: 'income', amount, categoryId: INTEREST_CATEGORY, date: d, note: acc.name, accountId: it.payoutAccountId || acc.id, autoInterest: true, sourceId: acc.id }];
+      }
+      paid.push(d);
+    }
+    changed = true;
+    return { ...acc, interest: { ...it, paid } };
+  });
+  return changed ? { ...data, accounts, transactions: txs } : data;
+}
+
+// Redeeming (fully or partly): `principal` leaves the certificate, `received` lands in `toId`.
+// More received than released is extra interest (income); less is a penalty (expense on the certificate).
+export function redeemCertificate(data, { accountId, principal, received, toId, date, note }) {
+  const acc = data.accounts.find((a) => a.id === accountId);
+  if (!acc || !(principal > 0) || !(received >= 0)) return data;
+  const balance = accountBalance(acc, data.transactions, data.transfers, date);
+  const released = Math.min(principal, Math.max(balance, 0));
+  const closing = released >= balance - 0.005;
+  const transfers = [...data.transfers];
+  let txs = [...data.transactions];
+  const sameAccount = toId === accountId;
+  const moved = Math.min(received, released);
+  if (!sameAccount && moved > 0) transfers.push({ id: newId(), date, fromId: accountId, toId, amount: moved, note: note || 'Redemption' });
+  if (received > released) txs.push({ id: newId(), type: 'income', amount: round2(received - released), categoryId: INTEREST_CATEGORY, date, note: note || acc.name, accountId: toId });
+  if (received < released) txs.push({ id: newId(), type: 'expense', amount: round2(released - received), categoryId: 'c-other', date, note: note || acc.name, accountId: accountId });
+  const accounts = data.accounts.map((a) => (a.id === accountId ? { ...a, archived: closing ? true : a.archived, interest: a.interest ? { ...a.interest, closed: closing || a.interest.closed } : a.interest } : a));
+  return { ...data, accounts, transfers, transactions: txs };
+}

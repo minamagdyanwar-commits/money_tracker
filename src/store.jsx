@@ -1,6 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useReducer, useRef, useState } from 'react';
 import { loadState, requestPersistence, saveState } from './db.js';
-import { accountInUse, firstActiveAccount, isValidBackup, monthOf, newId, payKey } from './logic.js';
+import { INTEREST_CATEGORY, accountInUse, accrueInterest, firstActiveAccount, isValidBackup, isoDate, monthOf, newId, payKey, redeemCertificate } from './logic.js';
 import { DEFAULT_ACCOUNT_NAMES, DEFAULT_CATEGORY_NAMES, MONTHS, MONTHS_SHORT, detectLang, translate } from './i18n.js';
 
 export const DEFAULT_ACCOUNT_ID = 'acc-main';
@@ -25,6 +25,7 @@ export const initialState = () => ({
     cat('i-bonus', 'Bonus', 'income', PALETTE[1]),
     cat('i-side', 'Side income', 'income', PALETTE[2]),
     cat('i-other', 'Other', 'income', PALETTE[4]),
+    cat(INTEREST_CATEGORY, 'Interest', 'income', PALETTE[6]),
   ],
   accounts: [{ id: DEFAULT_ACCOUNT_ID, name: 'Main account', type: 'bank', color: PALETTE[0], openingBalance: 0, archived: false }],
   transactions: [],
@@ -120,6 +121,10 @@ export function reducer(state, action) {
         settings: { ...state.settings, currency: action.currency || state.settings.currency, onboarded: true, lastAccountId: accounts[0].id },
       };
     }
+    case 'interest/accrue':
+      return accrueInterest(state, action.today);
+    case 'cert/redeem':
+      return redeemCertificate(state, action.redeem);
     case 'settings':
       return { ...state, settings: { ...state.settings, ...action.settings } };
     case 'import':
@@ -140,6 +145,7 @@ export function mergeLoaded(saved) {
   if (saved.settings?.onboarded === undefined) merged.settings.onboarded = true;
   if (!Array.isArray(merged.accounts) || merged.accounts.length === 0) merged.accounts = base.accounts;
   if (!Array.isArray(merged.transfers)) merged.transfers = [];
+  if (!merged.categories.some((c) => c.id === INTEREST_CATEGORY)) merged.categories = [...merged.categories, base.categories.find((c) => c.id === INTEREST_CATEGORY)];
   const fallback = firstActiveAccount(merged.accounts);
   if (merged.transactions.some((t) => !t.accountId)) {
     merged.transactions = merged.transactions.map((t) => (t.accountId ? t : { ...t, accountId: fallback }));
@@ -169,6 +175,18 @@ export function Provider({ children }) {
   useEffect(() => {
     if (ready) saveState(state);
   }, [state, ready]);
+
+  // Credit interest that has come due: whenever accounts change (a new or edited certificate) and
+  // when the app is brought back to the front (a new day). It does nothing when nothing is due.
+  useEffect(() => {
+    if (ready) dispatch({ type: 'interest/accrue', today: isoDate() });
+  }, [ready, state.accounts]);
+  useEffect(() => {
+    if (!ready) return undefined;
+    const onVisible = () => document.visibilityState === 'visible' && dispatch({ type: 'interest/accrue', today: isoDate() });
+    document.addEventListener('visibilitychange', onVisible);
+    return () => document.removeEventListener('visibilitychange', onVisible);
+  }, [ready]);
 
   const { lang, theme } = state.settings;
   useEffect(() => {

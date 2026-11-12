@@ -163,3 +163,105 @@ test('accountSummary reports available credit across active cards', () => {
   assert.equal(s.availableCredit, 8000); // 8000 + 0 (over-limit card counts as 0) ; archived ignored
   assert.equal(L.accountSummary([{ id: 'a', type: 'bank' }], [], [], '2026-10-31').hasLimits, false);
 });
+
+const accOf = (extra = {}) => ({ id: 'c', type: 'certificate', name: 'Cert', openingBalance: 100000, ...extra });
+
+test('accountLedger: opening, running balance and totals for a period', () => {
+  const acc = { id: 'a', openingBalance: 1000 };
+  const txs = [
+    { ...tx('2026-09-10', 'income', 500), accountId: 'a' },
+    { ...tx('2026-10-05', 'expense', 200), accountId: 'a' },
+    { ...tx('2026-10-20', 'income', 300), accountId: 'a' },
+    { ...tx('2026-11-02', 'expense', 50), accountId: 'a' },
+  ];
+  const transfers = [{ id: 't', date: '2026-10-12', fromId: 'a', toId: 'b', amount: 400 }];
+  const l = L.accountLedger(acc, txs, transfers, '2026-10-01', '2026-10-31');
+  assert.equal(l.opening, 1500);
+  assert.deepEqual(l.rows.map((r) => r.balanceAfter), [1300, 900, 1200]);
+  assert.equal(l.inTotal, 300);
+  assert.equal(l.outTotal, 600);
+  assert.equal(l.closing, 1200);
+  assert.equal(L.accountLedger(acc, txs, transfers).rows.length, 5);
+  assert.equal(L.accountLedger(acc, txs, transfers).opening, 1000);
+});
+
+test('balanceSeries samples the running balance', () => {
+  const acc = { id: 'a', openingBalance: 100 };
+  const txs = [{ ...tx('2026-10-02', 'income', 50), accountId: 'a' }];
+  const l = L.accountLedger(acc, txs, [], '2026-10-01', '2026-10-03');
+  assert.deepEqual(L.balanceSeries(l, '2026-10-01', '2026-10-03'), [
+    { date: '2026-10-01', value: 100 }, { date: '2026-10-02', value: 150 }, { date: '2026-10-03', value: 150 },
+  ]);
+  const long = L.accountLedger(acc, txs, [], '2026-01-01', '2026-12-31');
+  assert.ok(L.balanceSeries(long, '2026-01-01', '2026-12-31').length < 60);
+});
+
+test('monthlyFlow splits money in and out per month', () => {
+  const rows = [{ date: '2026-10-01', delta: 100 }, { date: '2026-10-02', delta: -30 }, { date: '2026-11-01', delta: -5 }];
+  assert.deepEqual(L.monthlyFlow(rows, ['2026-10', '2026-11']), { income: [100, 0], expense: [30, 5] });
+});
+
+test('addMonthsToDate clamps to short months; monthsBetween', () => {
+  assert.equal(L.addMonthsToDate('2026-01-31', 1), '2026-02-28');
+  assert.equal(L.addMonthsToDate('2026-11-15', 3), '2027-02-15');
+  assert.equal(L.monthsBetween('2026-01-15', '2027-01-15'), 12);
+});
+
+test('dueInterestDates: monthly schedule, paid dates and maturity are respected', () => {
+  const it = { rate: 18, every: 'monthly', firstDate: '2026-08-15', paid: ['2026-08-15'] };
+  assert.deepEqual(L.dueInterestDates(it, '2026-10-20'), ['2026-09-15', '2026-10-15']);
+  assert.deepEqual(L.dueInterestDates({ ...it, maturityDate: '2026-09-30' }, '2026-10-20'), ['2026-09-15']);
+  assert.deepEqual(L.dueInterestDates({ rate: 10, every: 'maturity', startDate: '2025-10-01', maturityDate: '2026-10-01' }, '2026-10-02'), ['2026-10-01']);
+  assert.deepEqual(L.dueInterestDates({ ...it, closed: true }, '2026-10-20'), []);
+});
+
+test('interestFor: monthly, quarterly and at-maturity amounts', () => {
+  assert.equal(L.interestFor({ rate: 18, every: 'monthly' }, 100000), 1500);
+  assert.equal(L.interestFor({ rate: 12, every: 'quarterly' }, 100000), 3000);
+  assert.equal(L.interestFor({ rate: 10, every: 'maturity', startDate: '2025-10-01' }, 100000, '2026-10-01'), 10000);
+  assert.equal(L.interestFor({ rate: 10, every: 'monthly' }, -5), 0);
+});
+
+test('accrueInterest credits due interest once and is idempotent', () => {
+  const cert = accOf({ interest: { rate: 12, every: 'monthly', firstDate: '2026-09-01', payoutAccountId: 'bank', paid: [] } });
+  const data = { accounts: [cert, { id: 'bank', type: 'bank', openingBalance: 0 }], transactions: [], transfers: [] };
+  const a = L.accrueInterest(data, '2026-10-05');
+  assert.equal(a.transactions.length, 2);
+  assert.ok(a.transactions.every((t) => t.type === 'income' && t.amount === 1000 && t.accountId === 'bank' && t.categoryId === 'i-interest'));
+  assert.deepEqual(a.accounts[0].interest.paid, ['2026-09-01', '2026-10-01']);
+  assert.equal(L.accrueInterest(a, '2026-10-05'), a); // nothing new -> same object
+  assert.equal(L.accrueInterest(a, '2026-11-01').transactions.length, 3);
+  // deleting a generated entry does not bring it back
+  const deleted = { ...a, transactions: [] };
+  assert.equal(L.accrueInterest(deleted, '2026-10-05').transactions.length, 0);
+});
+
+test('accrueInterest into the certificate itself compounds', () => {
+  const cert = accOf({ openingBalance: 1200, interest: { rate: 12, every: 'monthly', firstDate: '2026-09-01', payoutAccountId: 'c', paid: [] } });
+  const a = L.accrueInterest({ accounts: [cert], transactions: [], transfers: [] }, '2026-10-05');
+  assert.deepEqual(a.transactions.map((t) => t.amount), [12, 12.12]);
+});
+
+test('nextInterest estimates the coming payout', () => {
+  const cert = accOf({ interest: { rate: 12, every: 'monthly', firstDate: '2026-09-15', paid: [] } });
+  assert.deepEqual(L.nextInterest(cert, 100000, '2026-10-20'), { date: '2026-11-15', amount: 1000 });
+  assert.equal(L.nextInterest({ ...cert, interest: { ...cert.interest, maturityDate: '2026-10-31' } }, 100000, '2026-10-20'), null);
+});
+
+test('redeemCertificate: full redemption with extra interest and with penalty', () => {
+  const base = () => ({ accounts: [accOf({ interest: { rate: 10, every: 'monthly', firstDate: '2026-09-01', paid: [] } }), { id: 'bank', type: 'bank', openingBalance: 0 }], transactions: [], transfers: [] });
+  const more = L.redeemCertificate(base(), { accountId: 'c', principal: 100000, received: 101000, toId: 'bank', date: '2026-10-10' });
+  assert.equal(more.transfers[0].amount, 100000);
+  assert.equal(more.transactions[0].amount, 1000);
+  assert.equal(more.accounts[0].archived, true);
+  assert.equal(more.accounts[0].interest.closed, true);
+  assert.equal(L.accountBalance(more.accounts[0], more.transactions, more.transfers, '2026-10-10'), 0);
+  assert.equal(L.accountBalance(more.accounts[1], more.transactions, more.transfers, '2026-10-10'), 101000);
+  const less = L.redeemCertificate(base(), { accountId: 'c', principal: 100000, received: 98000, toId: 'bank', date: '2026-10-10' });
+  assert.equal(less.transfers[0].amount, 98000);
+  assert.equal(less.transactions[0].type, 'expense');
+  assert.equal(L.accountBalance(less.accounts[0], less.transactions, less.transfers, '2026-10-10'), 0);
+  const part = L.redeemCertificate(base(), { accountId: 'c', principal: 40000, received: 40000, toId: 'bank', date: '2026-10-10' });
+  assert.equal(part.accounts[0].archived, undefined);
+  assert.equal(L.accountBalance(part.accounts[0], part.transactions, part.transfers, '2026-10-10'), 60000);
+});

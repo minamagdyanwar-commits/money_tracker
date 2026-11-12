@@ -29,12 +29,29 @@ export const DEFAULT_CATEGORY_NAMES = {
   'i-bonus': ['Bonus', 'مكافأة'],
   'i-side': ['Side income', 'دخل إضافي'],
   'i-other': ['Other', 'أخرى'],
+  'i-interest': ['Interest', 'فوائد'],
 };
 
 export const DEFAULT_ACCOUNT_NAMES = { 'acc-main': ['Main account', 'الحساب الرئيسي'] };
 
 const ar = {
   'nav.accounts': 'الحسابات',
+  'acc.type.certificate': 'شهادة / وديعة',
+  'acc.in': 'داخل', 'acc.out': 'خارج', 'acc.back': 'رجوع', 'acc.addEntry': '+ عملية', 'acc.period': 'الفترة',
+  'acc.p.month': 'الشهر ده', 'acc.p.3m': '3 شهور', 'acc.p.6m': '6 شهور', 'acc.p.year': 'السنة دي', 'acc.p.all': 'الكل', 'acc.p.custom': 'مخصص',
+  'acc.from': 'من', 'acc.to': 'إلى', 'acc.openBal': 'الرصيد في أول الفترة', 'acc.closeBal': 'الرصيد في آخر الفترة', 'acc.moneyIn': 'إجمالي الداخل', 'acc.moneyOut': 'إجمالي الخارج',
+  'acc.balanceChart': 'تطور الرصيد', 'acc.flowChart': 'الداخل والخارج شهريًا', 'acc.history': 'سجل الحساب', 'acc.filterAll': 'الكل', 'acc.filterIn': 'داخل', 'acc.filterOut': 'خارج', 'acc.filterTransfers': 'تحويلات',
+  'acc.search': 'بحث في السجل', 'acc.noRows': 'مفيش حركة في الفترة دي.', 'acc.balAfter': 'الرصيد بعدها {amt}', 'acc.more': 'عرض المزيد', 'acc.auto': 'فائدة تلقائية', 'acc.tapToEdit': 'اضغط على أي حركة لتعديلها أو حذفها.',
+  'acc.savings': 'المدخرات والشهادات',
+  'cert.section': 'الفائدة', 'cert.rate': 'نسبة الفائدة السنوية (%)', 'cert.every': 'بتتصرف كل', 'cert.monthly': 'شهر', 'cert.quarterly': '3 شهور', 'cert.semiannual': '6 شهور', 'cert.yearly': 'سنة', 'cert.maturity': 'في آخر المدة',
+  'cert.first': 'أول فائدة بتاريخ', 'cert.start': 'تاريخ بداية الشهادة', 'cert.maturityDate': 'تاريخ الاستحقاق', 'cert.maturityOpt': 'تاريخ الاستحقاق (اختياري)',
+  'cert.payTo': 'الفائدة بتتحط في', 'cert.reinvest': 'نفس الشهادة (تتراكم)', 'cert.fundFrom': 'اسحب المبلغ من حساب (اختياري، لشهادة جديدة)', 'cert.fundNone': 'لا',
+  'cert.pastHint': 'لو التاريخ في الماضي، الفوائد اللي استحقت فعلًا هتتضاف تلقائيًا.', 'cert.autoHint': 'الفوائد بتتحسب وتتضاف لوحدها كدخل في الموعد، وتقدر تعدّلها أو تحذفها من السجل.',
+  'cert.rateLine': 'فائدة {rate}% سنويًا · كل {every}', 'cert.next': 'الفائدة الجاية {date} ≈ {amt}', 'cert.matured': 'انتهت المدة', 'cert.closed': 'اتفكّت',
+  'cert.redeem': 'فك الشهادة', 'cert.redeemTitle': 'فك {name}', 'cert.principalOut': 'المبلغ اللي بيخرج من الشهادة ({cur})', 'cert.received': 'المبلغ اللي استلمته ({cur})',
+  'cert.receiveIn': 'استلمته في حساب', 'cert.redeemHint': 'لو استلمت أكتر من المبلغ، الفرق بيتسجّل فائدة. لو أقل، الفرق بيتسجّل غرامة. وتقدر تفك جزء من الشهادة.',
+  'cert.redeemDone': 'تم فك الشهادة · {amt} {cur}', 'cert.balanceNow': 'رصيدها دلوقتي: {amt} {cur}',
+
   'set.update': 'تحديث التطبيق لأحدث نسخة', 'set.updateHint': 'بيمسح الملفات المخزّنة للتطبيق بس ويحمّل النسخة الجديدة. بياناتك ما بتتأثرش.',
   'acc.limit': 'حد الكارت ({cur})', 'acc.limitHint': 'الحد الأقصى المسموح للكارت. هنحسب لك المتاح للاستخدام = الحد − المديونية.',
   'acc.availableCredit': 'المتاح للاستخدام', 'acc.availableOf': 'المتاح {avail} من {limit}', 'acc.used': 'مستخدم {pct}%',
@@ -135,6 +152,22 @@ const ar = {
 
 const en = {
   'nav.accounts': 'Accounts',
+  'acc.type.certificate': 'Certificate / deposit',
+  'acc.in': 'In', 'acc.out': 'Out', 'acc.back': 'Back', 'acc.addEntry': '+ Entry', 'acc.period': 'Period',
+  'acc.p.month': 'This month', 'acc.p.3m': '3 months', 'acc.p.6m': '6 months', 'acc.p.year': 'This year', 'acc.p.all': 'All', 'acc.p.custom': 'Custom',
+  'acc.from': 'From', 'acc.to': 'To', 'acc.openBal': 'Balance at start', 'acc.closeBal': 'Balance at end', 'acc.moneyIn': 'Total in', 'acc.moneyOut': 'Total out',
+  'acc.balanceChart': 'Balance over time', 'acc.flowChart': 'In and out per month', 'acc.history': 'Account history', 'acc.filterAll': 'All', 'acc.filterIn': 'In', 'acc.filterOut': 'Out', 'acc.filterTransfers': 'Transfers',
+  'acc.search': 'Search history', 'acc.noRows': 'No activity in this period.', 'acc.balAfter': 'Balance after {amt}', 'acc.more': 'Show more', 'acc.auto': 'Auto interest', 'acc.tapToEdit': 'Tap any entry to edit or delete it.',
+  'acc.savings': 'Savings & certificates',
+  'cert.section': 'Interest', 'cert.rate': 'Annual interest rate (%)', 'cert.every': 'Paid every', 'cert.monthly': 'month', 'cert.quarterly': '3 months', 'cert.semiannual': '6 months', 'cert.yearly': 'year', 'cert.maturity': 'At maturity',
+  'cert.first': 'First interest on', 'cert.start': 'Certificate start date', 'cert.maturityDate': 'Maturity date', 'cert.maturityOpt': 'Maturity date (optional)',
+  'cert.payTo': 'Interest goes into', 'cert.reinvest': 'The certificate itself (compounds)', 'cert.fundFrom': 'Take the amount from an account (optional)', 'cert.fundNone': 'No',
+  'cert.pastHint': 'If the date is in the past, interest that already came due is added automatically.', 'cert.autoHint': 'Interest is calculated and added as income on its date by itself. You can edit or delete it from the history.',
+  'cert.rateLine': '{rate}% per year · every {every}', 'cert.next': 'Next interest {date} ≈ {amt}', 'cert.matured': 'Matured', 'cert.closed': 'Redeemed',
+  'cert.redeem': 'Redeem certificate', 'cert.redeemTitle': 'Redeem {name}', 'cert.principalOut': 'Amount leaving the certificate ({cur})', 'cert.received': 'Amount you received ({cur})',
+  'cert.receiveIn': 'Received into', 'cert.redeemHint': 'If you received more than that amount the difference is recorded as interest; if less, as a penalty. You can redeem part of the certificate.',
+  'cert.redeemDone': 'Certificate redeemed · {amt} {cur}', 'cert.balanceNow': 'Balance now: {amt} {cur}',
+
   'set.update': 'Update to the latest version', 'set.updateHint': 'Clears the app files cached on this device and reloads the newest version. Your data is not touched.',
   'acc.limit': 'Card limit ({cur})', 'acc.limitHint': 'The most the card allows. You will see available credit = limit − what you owe.',
   'acc.availableCredit': 'Available to spend', 'acc.availableOf': '{avail} available of {limit}', 'acc.used': '{pct}% used',

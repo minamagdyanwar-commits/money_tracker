@@ -6,7 +6,7 @@ import {
 } from './logic.js';
 import { BarChart, Donut, Icon, MonthNav } from './ui.jsx';
 import AddSheet from './AddSheet.jsx';
-import { BalanceText } from './Accounts.jsx';
+import { BalanceText } from './AccountBits.jsx';
 import PaySheet, { defaultPayDate } from './PaySheet.jsx';
 import { exportBackup } from './backup.js';
 

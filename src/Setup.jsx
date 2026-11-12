@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { PALETTE, useApp } from './store.jsx';
 import { fmt } from './logic.js';
 import { DEFAULT_ACCOUNT_NAMES } from './i18n.js';
-import { ACCOUNT_TYPES } from './Accounts.jsx';
+import { SETUP_TYPES } from './AccountBits.jsx';
 import { Field, Icon, numericOnly, parseAmount } from './ui.jsx';
 
 // First-run screen: the user states what each account holds today. Those starting
@@ -60,7 +60,7 @@ export default function Setup() {
               <input type="text" placeholder={t('acc.namePh')} value={r.name} onChange={(e) => update(i, { name: e.target.value })} />
             </Field>
             <div className="chips">
-              {ACCOUNT_TYPES.map((k) => <button key={k} className={'chip' + (r.type === k ? ' on' : '')} onClick={() => update(i, { type: k })}>{t('acc.type.' + k)}</button>)}
+              {SETUP_TYPES.map((k) => <button key={k} className={'chip' + (r.type === k ? ' on' : '')} onClick={() => update(i, { type: k })}>{t('acc.type.' + k)}</button>)}
             </div>
             <Field label={t(r.type === 'credit' ? 'acc.openingOwed' : 'acc.opening', { cur })}>
               <input inputMode="decimal" placeholder="0" aria-label={t('acc.opening', { cur })} value={r.amount} onChange={(e) => update(i, { amount: numericOnly(e.target.value) })} />
