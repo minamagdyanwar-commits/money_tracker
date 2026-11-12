@@ -3,6 +3,9 @@
 Personal expense and income tracker. Installable web app (PWA) that works offline. All data stays on your device (IndexedDB); nothing is sent anywhere.
 
 ## Features
+- "Update to the latest version" button in Settings (clears cached app files, keeps your data)
+- Account page: full history of one account for any period (entries and transfers with the balance after each, tap to edit), balance chart and in/out per month
+- Certificates / deposits: interest rate and payout schedule, interest added automatically as income (to another account or compounding), redeem with the amount actually received
 - Credit card limits: owed amount, available credit and usage bar per card (warns near and over the limit)
 - First-run setup: enter each account and its starting balance before anything else
 - Multiple accounts (salary, cash, credit card, other banks) with transfers between them and the balance of each account as of any date

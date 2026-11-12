@@ -166,3 +166,34 @@ export function BarChart({ months, income, expense }) {
     </svg>
   );
 }
+
+// Balance over time. `points` are { date, value }; negative balances draw below a zero line.
+export function TrendChart({ points, color = '#1F6F5C', label }) {
+  const { dayLabel } = useApp();
+  if (points.length === 0) return null;
+  const W = 330;
+  const padX = 12;
+  const values = points.map((p) => p.value);
+  const hi = Math.max(...values, 0);
+  const lo = Math.min(...values, 0);
+  const span = hi - lo || 1;
+  const x = (i) => (points.length === 1 ? W / 2 : padX + (i * (W - padX * 2)) / (points.length - 1));
+  const y = (v) => 12 + (1 - (v - lo) / span) * 110;
+  const line = points.map((p, i) => `${x(i)},${y(p.value)}`).join(' ');
+  const area = `${x(0)},${y(0)} ${line} ${x(points.length - 1)},${y(0)}`;
+  const ticks = points.length <= 5 ? points.map((_, i) => i) : [0, Math.round((points.length - 1) / 4), Math.round((points.length - 1) / 2), Math.round(((points.length - 1) * 3) / 4), points.length - 1];
+  const last = points.length - 1;
+  return (
+    <svg viewBox="0 0 330 150" width="100%" role="img" aria-label={label} style={{ direction: 'ltr' }}>
+      <line x1={padX} x2={W - padX} y1={y(0)} y2={y(0)} style={{ stroke: 'var(--faint)' }} strokeWidth="1" strokeDasharray="4 4" />
+      <polygon points={area} fill={color} opacity="0.12" />
+      <polyline points={line} fill="none" stroke={color} strokeWidth="2.5" strokeLinejoin="round" strokeLinecap="round" />
+      <circle cx={x(last)} cy={y(points[last].value)} r="5" fill={color} style={{ stroke: 'var(--card)' }} strokeWidth="2" />
+      {[...new Set(ticks)].map((i) => (
+        <text key={i} x={x(i)} y="145" fontSize="10" textAnchor={i === 0 ? 'start' : i === last ? 'end' : 'middle'} style={{ fill: 'var(--muted)' }}>
+          {dayLabel(points[i].date)}
+        </text>
+      ))}
+    </svg>
+  );
+}

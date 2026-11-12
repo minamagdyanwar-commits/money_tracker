@@ -57,6 +57,18 @@ function Choice({ value, options, onChange, label }) {
   );
 }
 
+// Drops the service worker and its cached files, then reloads. Entries live in IndexedDB and are untouched.
+async function updateApp() {
+  try {
+    const regs = (await navigator.serviceWorker?.getRegistrations?.()) || [];
+    await Promise.all(regs.map((r) => r.unregister()));
+    await Promise.all((await caches.keys()).map((k) => caches.delete(k)));
+  } catch {
+    /* reload anyway */
+  }
+  window.location.reload();
+}
+
 export default function Settings() {
   const { state, dispatch, persisted, t, toast, catName, lang } = useApp();
   const [catType, setCatType] = useState('expense');
@@ -143,6 +155,10 @@ export default function Settings() {
             <span className="muted" dir="ltr">{v}</span>
           </div>
         ))}
+        <div className="item" style={{ cursor: 'default', flexDirection: 'column', alignItems: 'stretch', padding: '12px 0' }}>
+          <button className="btn secondary" onClick={updateApp}>{t('set.update')}</button>
+          <div className="muted small" style={{ marginTop: 6 }}>{t('set.updateHint')}</div>
+        </div>
       </div>
 
       {editing !== undefined && <CategoryForm cat={editing} catType={catType} onClose={() => setEditing(undefined)} />}
